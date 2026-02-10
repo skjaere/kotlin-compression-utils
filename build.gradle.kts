@@ -2,10 +2,10 @@ plugins {
     `java-library`
     `maven-publish`
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlinx.kover)
 }
 
 group = "io.skjaere"
-version = "0.1.0"
 description = "Kotlin library for extracting metadata from RAR4, RAR5, and 7zip archives"
 
 repositories {
@@ -16,6 +16,7 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
+    withSourcesJar()
 }
 
 dependencies {

@@ -1,5 +1,9 @@
 # kotlin-compression-utils
 
+[![CI](https://github.com/skjaere/kotlin-compression-utils/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skjaere/kotlin-compression-utils/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/skjaere/kotlin-compression-utils/branch/main/graph/badge.svg)](https://codecov.io/gh/skjaere/kotlin-compression-utils)
+[![](https://jitpack.io/v/skjaere/kotlin-compression-utils.svg)](https://jitpack.io/#skjaere/kotlin-compression-utils)
+
 A Kotlin library for extracting **metadata** from RAR4, RAR5, and 7zip archives.
 
 > **Important:** This library does **not** perform archive extraction or compression. It only reads archive headers to extract file listings, byte offsets, sizes, and split/multi-volume information. This makes it suitable for scenarios where you need to inspect archive contents without extracting them, such as building file indexes or streaming specific files from remote archives.
@@ -15,6 +19,21 @@ A Kotlin library for extracting **metadata** from RAR4, RAR5, and 7zip archives.
 - Java 25+
 - Kotlin 2.3+
 - Gradle 9+
+
+## Installation
+
+Add to your `build.gradle.kts`:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    implementation("com.github.skjaere:kotlin-compression-utils:v0.1.0")
+}
+```
 
 ## Usage
 

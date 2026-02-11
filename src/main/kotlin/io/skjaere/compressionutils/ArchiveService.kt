@@ -33,6 +33,12 @@ object ArchiveService {
         """(?i)\.(7z|7z\.\d{3})$"""
     )
 
+    private val MODERN_RAR_REGEX = Regex("""(?i)\.part(\d+)\.rar$""")
+    private val OLD_RAR_FIRST_REGEX = Regex("""(?i)\.rar$""")
+    private val OLD_RAR_EXT_REGEX = Regex("""(?i)\.([a-z])(\d{2,3})$""")
+    private val SPLIT_7Z_REGEX = Regex("""(?i)\.7z\.(\d{3})$""")
+    private val SINGLE_7Z_REGEX = Regex("""(?i)\.7z$""")
+
     /**
      * Lists files from archive volumes represented as a single concatenated stream.
      *
@@ -49,11 +55,7 @@ object ArchiveService {
         volumes: List<VolumeMetaData>,
         par2Data: ByteArray? = null
     ): List<ArchiveFileEntry> {
-        val resolvedVolumes = if (par2Data != null && volumes.any { !fileHasKnownExtension(it.filename) }) {
-            resolveObfuscatedFilenames(volumes, par2Data)
-        } else {
-            volumes
-        }
+        val resolvedVolumes = resolveVolumes(volumes, par2Data)
 
         val archiveType = detectArchiveType(resolvedVolumes, stream)
         logger.debug("Detected archive type: {}", archiveType)
@@ -89,6 +91,26 @@ object ArchiveService {
         val volume = VolumeMetaData(filename = file.name, size = file.length())
         val stream = FileSeekableInputStream(RandomAccessFile(file, "r"))
         return stream.use { listFiles(it, listOf(volume)) }
+    }
+
+    /**
+     * Resolves obfuscated volume filenames (if PAR2 data is provided) and sorts
+     * volumes into the correct archive volume order.
+     *
+     * @param volumes Volume metadata (possibly with obfuscated filenames)
+     * @param par2Data Raw PAR2 file data for resolving obfuscated filenames (optional)
+     * @return Volumes with resolved filenames, sorted in correct archive order
+     */
+    fun resolveVolumes(
+        volumes: List<VolumeMetaData>,
+        par2Data: ByteArray? = null
+    ): List<VolumeMetaData> {
+        val resolved = if (par2Data != null && volumes.any { !fileHasKnownExtension(it.filename) }) {
+            resolveObfuscatedFilenames(volumes, par2Data)
+        } else {
+            volumes
+        }
+        return resolved.sortedBy { volumeSortKey(it.filename) }
     }
 
     /**
@@ -152,5 +174,35 @@ object ArchiveService {
     private fun md5Hex(data: ByteArray): String {
         val digest = MessageDigest.getInstance("MD5")
         return digest.digest(data).joinToString("") { "%02x".format(it) }
+    }
+
+    internal fun volumeSortKey(filename: String): Int {
+        // Modern RAR: .partN.rar → N
+        MODERN_RAR_REGEX.find(filename)?.let { match ->
+            return match.groupValues[1].toInt()
+        }
+
+        // Old-style RAR: .rar → 0, .rNN → (letter-'r')*1000+NN, .sNN → (letter-'r')*1000+NN
+        if (OLD_RAR_FIRST_REGEX.containsMatchIn(filename)) {
+            return 0
+        }
+        OLD_RAR_EXT_REGEX.find(filename)?.let { match ->
+            val letter = match.groupValues[1].lowercase()[0]
+            val num = match.groupValues[2].toInt()
+            return (letter - 'r') * 1000 + num + 1
+        }
+
+        // Split 7z: .7z.NNN → NNN
+        SPLIT_7Z_REGEX.find(filename)?.let { match ->
+            return match.groupValues[1].toInt()
+        }
+
+        // Single 7z: .7z → 0
+        if (SINGLE_7Z_REGEX.containsMatchIn(filename)) {
+            return 0
+        }
+
+        // Unknown → sort last
+        return Int.MAX_VALUE
     }
 }

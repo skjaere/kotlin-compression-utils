@@ -596,7 +596,7 @@ class Rar4Parser {
         }
 
         return RarFileEntry(
-            path = fileName,
+            path = fileName.replace('\\', '/'),
             uncompressedSize = fullUnpackSize,
             compressedSize = fullPackSize,
             headerPosition = headerDataPosition,
@@ -604,7 +604,8 @@ class Rar4Parser {
             isDirectory = isDirectory,
             volumeIndex = volumeIndex,
             compressionMethod = compressionMethod,
-            splitParts = emptyList() // Will be populated by caller
+            splitParts = emptyList(), // Will be populated by caller
+            crc32 = fileCrc.toLong() and 0xFFFFFFFFL
         )
     }
 }

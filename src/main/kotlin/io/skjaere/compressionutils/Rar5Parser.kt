@@ -258,9 +258,10 @@ class Rar5Parser {
             }
 
             // Read CRC32 if present (4 bytes, optional)
+            var fileCrc: Long? = null
             if (fileFlags and 0x04L != 0L) {
                 if (buffer.remaining() < 4) return null
-                buffer.getInt() // skip crc
+                fileCrc = buffer.getInt().toLong() and 0xFFFFFFFFL
             }
 
             // Read compression info (vint)
@@ -293,7 +294,7 @@ class Rar5Parser {
             }
 
             return RarFileEntry(
-                path = fileName,
+                path = fileName.replace('\\', '/'),
                 uncompressedSize = unpackedSize,
                 compressedSize = dataAreaSize, // Size of compressed data in this volume
                 headerPosition = headerDataPosition,
@@ -301,7 +302,8 @@ class Rar5Parser {
                 isDirectory = isDirectory,
                 volumeIndex = volumeIndex,
                 compressionMethod = compressionMethod,
-                splitParts = emptyList() // Will be populated by caller
+                splitParts = emptyList(), // Will be populated by caller
+                crc32 = fileCrc
             )
         } catch (e: Exception) {
             logger.error("Error parsing RAR5 file header", e)

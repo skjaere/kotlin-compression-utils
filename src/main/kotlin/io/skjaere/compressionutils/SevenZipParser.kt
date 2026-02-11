@@ -428,7 +428,9 @@ class SevenZipParser {
         // Calculate data offsets: file data starts at SIGNATURE_HEADER_SIZE + packPos
         val packPos = packInfo?.packPos ?: 0L
         var currentOffset = SIGNATURE_HEADER_SIZE + packPos
+        val crcs = subStreamsInfo?.crcs
 
+        var streamIdx = 0
         for (i in 0 until numFiles) {
             val name = if (i < fileNames.size) fileNames[i] else ""
             val isEmptyStream = i < emptyStreamFlags.size && emptyStreamFlags[i]
@@ -437,6 +439,9 @@ class SevenZipParser {
             val size = fileSizes[i]
 
             val dataOffset = if (!isEmptyStream && size > 0) currentOffset else 0L
+            val crc = if (!isEmptyStream && crcs != null && streamIdx < crcs.size)
+                crcs[streamIdx].toLong() and 0xFFFFFFFFL else null
+            if (!isEmptyStream) streamIdx++
 
             entries.add(
                 SevenZipFileEntry(
@@ -445,7 +450,8 @@ class SevenZipParser {
                     packedSize = size, // Copy codec: packed == unpacked
                     dataOffset = dataOffset,
                     isDirectory = isDirectory,
-                    method = if (isDirectory || isEmptyStream) null else "Copy"
+                    method = if (isDirectory || isEmptyStream) null else "Copy",
+                    crc32 = crc
                 )
             )
 

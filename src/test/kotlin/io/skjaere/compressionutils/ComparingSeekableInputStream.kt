@@ -13,7 +13,7 @@ class ComparingSeekableInputStream(
     private var mismatchCount = 0
     private val maxMismatchesToLog = 20
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         val testByte = testStream.read()
         if (comparisonEnabled) {
             val refByte = referenceStream.read()
@@ -29,7 +29,7 @@ class ComparingSeekableInputStream(
         return testByte
     }
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         val bytesRead = testStream.read(buffer, offset, length)
 
         if (comparisonEnabled && bytesRead > 0) {
@@ -59,7 +59,7 @@ class ComparingSeekableInputStream(
         return bytesRead
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         testStream.seek(position)
         if (comparisonEnabled) {
             referenceStream.seek(position)

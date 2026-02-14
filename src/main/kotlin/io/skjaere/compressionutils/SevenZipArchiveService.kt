@@ -21,7 +21,7 @@ class SevenZipArchiveService {
      * @param stream A SeekableInputStream representing the 7z archive
      * @return List of SevenZipFileEntry objects containing file metadata with exact byte offsets
      */
-    fun listFiles(stream: SeekableInputStream): List<SevenZipFileEntry> {
+    suspend fun listFiles(stream: SeekableInputStream): List<SevenZipFileEntry> {
         return parser.parse(stream)
     }
 
@@ -31,7 +31,7 @@ class SevenZipArchiveService {
      * @param filePath Path to the 7z archive file
      * @return List of SevenZipFileEntry objects containing file metadata with exact byte offsets
      */
-    fun listFiles(filePath: String): List<SevenZipFileEntry> {
+    suspend fun listFiles(filePath: String): List<SevenZipFileEntry> {
         FileSeekableInputStream(RandomAccessFile(filePath, "r")).use { stream ->
             return parser.parse(stream)
         }

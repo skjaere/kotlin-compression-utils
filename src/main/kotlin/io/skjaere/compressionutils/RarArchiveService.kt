@@ -29,7 +29,7 @@ class RarArchiveService {
      * @param volumeSizes List of individual volume sizes in order (optional, enables split position calculation)
      * @return List of RarFileEntry objects containing file metadata from all volumes
      */
-    fun listFilesFromConcatenatedStream(
+    suspend fun listFilesFromConcatenatedStream(
         stream: SeekableInputStream,
         totalArchiveSize: Long? = null,
         volumeSizes: List<Long>? = null
@@ -52,7 +52,7 @@ class RarArchiveService {
      * @param archiveSize Total size of this volume (optional, enables single-file optimization)
      * @return List of RarFileEntry objects containing file metadata
      */
-    fun listFiles(
+    suspend fun listFiles(
         stream: SeekableInputStream,
         maxFiles: Int? = null,
         volumeIndex: Int = 0,
@@ -98,7 +98,7 @@ class RarArchiveService {
         return entries
     }
 
-    private fun readBytes(stream: SeekableInputStream, count: Int): ByteArray? {
+    private suspend fun readBytes(stream: SeekableInputStream, count: Int): ByteArray? {
         val buffer = ByteArray(count)
         var offset = 0
 
@@ -115,7 +115,7 @@ class RarArchiveService {
      * Convenience method to list files from a regular InputStream.
      * Wraps it in a BufferedSeekableInputStream adapter.
      */
-    fun listFiles(inputStream: InputStream, maxFiles: Int? = null): List<RarFileEntry> {
+    suspend fun listFiles(inputStream: InputStream, maxFiles: Int? = null): List<RarFileEntry> {
         return BufferedSeekableInputStream(inputStream).use { stream ->
             listFiles(stream, maxFiles)
         }
@@ -124,7 +124,7 @@ class RarArchiveService {
     /**
      * Convenience method to list files from a file path.
      */
-    fun listFiles(filePath: String, maxFiles: Int? = null): List<RarFileEntry> {
+    suspend fun listFiles(filePath: String, maxFiles: Int? = null): List<RarFileEntry> {
         return FileSeekableInputStream(RandomAccessFile(File(filePath), "r")).use { stream ->
             listFiles(stream, maxFiles)
         }

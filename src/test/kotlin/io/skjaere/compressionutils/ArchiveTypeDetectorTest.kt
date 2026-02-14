@@ -1,9 +1,9 @@
 package io.skjaere.compressionutils
 
 import io.skjaere.compressionutils.ArchiveTypeDetector.ArchiveType
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import java.io.ByteArrayInputStream
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -75,7 +75,7 @@ class ArchiveTypeDetectorTest {
     }
 
     @Test
-    fun `detect from SeekableInputStream resets position`(@TempDir tempDir: Path) {
+    fun `detect from SeekableInputStream resets position`(@TempDir tempDir: Path) = runBlocking {
         val rar5Bytes = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00) +
             ByteArray(24)
         val file = tempDir.resolve("test.bin").toFile()

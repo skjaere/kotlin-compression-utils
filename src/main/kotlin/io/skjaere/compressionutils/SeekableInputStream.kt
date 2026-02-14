@@ -17,21 +17,21 @@ interface SeekableInputStream : Closeable {
      * @param length the maximum number of bytes to read
      * @return the total number of bytes read into the buffer, or -1 if end of stream
      */
-    fun read(buffer: ByteArray, offset: Int, length: Int): Int
+    suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int
 
     /**
      * Reads a single byte from the stream.
      *
      * @return the byte read, or -1 if end of stream
      */
-    fun read(): Int
+    suspend fun read(): Int
 
     /**
      * Seeks to the specified position in the stream.
      *
      * @param position the position to seek to
      */
-    fun seek(position: Long)
+    suspend fun seek(position: Long)
 
     /**
      * Returns the current position in the stream.

@@ -1,15 +1,15 @@
 package io.skjaere.compressionutils.validation
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import java.io.File
 import java.nio.file.Path
 import kotlin.test.assertEquals
 
 class ConcatenatedFileSeekableInputStreamTest {
 
     @Test
-    fun `single file reads all bytes sequentially`(@TempDir tempDir: Path) {
+    fun `single file reads all bytes sequentially`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         val data = ByteArray(100) { it.toByte() }
         file.writeBytes(data)
@@ -27,7 +27,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `single byte read works`(@TempDir tempDir: Path) {
+    fun `single byte read works`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         file.writeBytes(byteArrayOf(0xAB.toByte(), 0xCD.toByte()))
 
@@ -40,7 +40,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `returns -1 at end of stream`(@TempDir tempDir: Path) {
+    fun `returns -1 at end of stream`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         file.writeBytes(byteArrayOf(1))
 
@@ -51,7 +51,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `bulk read returns -1 at end of stream`(@TempDir tempDir: Path) {
+    fun `bulk read returns -1 at end of stream`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         file.writeBytes(byteArrayOf(1))
 
@@ -63,7 +63,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `seek and read within single file`(@TempDir tempDir: Path) {
+    fun `seek and read within single file`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         val data = ByteArray(50) { it.toByte() }
         file.writeBytes(data)
@@ -80,7 +80,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `reads across two files seamlessly`(@TempDir tempDir: Path) {
+    fun `reads across two files seamlessly`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         file1.writeBytes(byteArrayOf(1, 2, 3))
@@ -97,7 +97,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `read crossing volume boundary`(@TempDir tempDir: Path) {
+    fun `read crossing volume boundary`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         file1.writeBytes(byteArrayOf(10, 20, 30))
@@ -114,7 +114,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `seek into second file`(@TempDir tempDir: Path) {
+    fun `seek into second file`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         file1.writeBytes(byteArrayOf(1, 2, 3))
@@ -128,7 +128,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `seek to exact boundary of first file reads from second`(@TempDir tempDir: Path) {
+    fun `seek to exact boundary of first file reads from second`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         file1.writeBytes(byteArrayOf(1, 2, 3))
@@ -141,7 +141,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `three files with different sizes`(@TempDir tempDir: Path) {
+    fun `three files with different sizes`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         val file3 = tempDir.resolve("vol3.bin").toFile()
@@ -166,7 +166,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `single byte reads across boundary`(@TempDir tempDir: Path) {
+    fun `single byte reads across boundary`(@TempDir tempDir: Path) = runBlocking {
         val file1 = tempDir.resolve("vol1.bin").toFile()
         val file2 = tempDir.resolve("vol2.bin").toFile()
         file1.writeBytes(byteArrayOf(0xAA.toByte()))
@@ -191,7 +191,7 @@ class ConcatenatedFileSeekableInputStreamTest {
     }
 
     @Test
-    fun `read with offset into buffer`(@TempDir tempDir: Path) {
+    fun `read with offset into buffer`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("vol1.bin").toFile()
         file.writeBytes(byteArrayOf(1, 2, 3))
 

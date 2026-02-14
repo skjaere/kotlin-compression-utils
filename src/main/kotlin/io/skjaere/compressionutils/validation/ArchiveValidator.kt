@@ -5,6 +5,7 @@ import io.skjaere.compressionutils.ArchiveService
 import io.skjaere.compressionutils.RarFileEntry
 import io.skjaere.compressionutils.SevenZipFileEntry
 import io.skjaere.compressionutils.VolumeMetaData
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.zip.CRC32
 
@@ -22,7 +23,7 @@ data class CommandResult(val exitCode: Int, val stdout: String, val stderr: Stri
 object ArchiveValidator {
 
     @JvmStatic
-    fun main(args: Array<String>) {
+    fun main(args: Array<String>) = runBlocking {
         if (args.isEmpty() || args[0].isBlank()) {
             System.err.println("Usage: ArchiveValidator <path-to-first-volume>")
             System.exit(1)
@@ -134,7 +135,7 @@ object ArchiveValidator {
         data class Skipped(val path: String, val reason: String) : ValidationResult
     }
 
-    private fun validateEntry(
+    private suspend fun validateEntry(
         entry: ArchiveFileEntry,
         crcMap: Map<String, String>,
         volumes: List<File>
@@ -145,7 +146,7 @@ object ArchiveValidator {
         }
     }
 
-    private fun validateRarEntry(
+    private suspend fun validateRarEntry(
         entry: RarFileEntry,
         crcMap: Map<String, String>,
         volumes: List<File>
@@ -180,7 +181,7 @@ object ArchiveValidator {
         }
     }
 
-    private fun validateSevenZipEntry(
+    private suspend fun validateSevenZipEntry(
         entry: SevenZipFileEntry,
         crcMap: Map<String, String>,
         volumes: List<File>
@@ -207,7 +208,7 @@ object ArchiveValidator {
         }
     }
 
-    private fun readIntoCrc(stream: ConcatenatedFileSeekableInputStream, bytesToRead: Long, crc32: CRC32) {
+    private suspend fun readIntoCrc(stream: ConcatenatedFileSeekableInputStream, bytesToRead: Long, crc32: CRC32) {
         val buffer = ByteArray(8192)
         var remaining = bytesToRead
         while (remaining > 0) {

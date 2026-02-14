@@ -1,5 +1,6 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import kotlin.test.assertEquals
@@ -57,7 +58,7 @@ class ArchiveServiceTest {
     // Dispatch tests
 
     @Test
-    fun `listFiles dispatches RAR5 archive correctly`() {
+    fun `listFiles dispatches RAR5 archive correctly`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-rar5.rar")!!.readAllBytes()
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(archiveBytes))
         val volumes = listOf(
@@ -75,7 +76,7 @@ class ArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles dispatches 7z archive correctly`() {
+    fun `listFiles dispatches 7z archive correctly`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test.7z")!!.readAllBytes()
         val stream = ByteArraySeekableInputStream(archiveBytes)
         val volumes = listOf(
@@ -92,7 +93,7 @@ class ArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles dispatches multi-file 7z archive correctly`() {
+    fun `listFiles dispatches multi-file 7z archive correctly`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-multifile.7z")!!.readAllBytes()
         val stream = ByteArraySeekableInputStream(archiveBytes)
         val volumes = listOf(
@@ -111,7 +112,7 @@ class ArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles dispatches RAR archive by byte signature when filename is obfuscated`() {
+    fun `listFiles dispatches RAR archive by byte signature when filename is obfuscated`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-rar5.rar")!!.readAllBytes()
         val first16kb = archiveBytes.sliceArray(0 until minOf(16384, archiveBytes.size))
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(archiveBytes))
@@ -131,7 +132,7 @@ class ArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles single file convenience method works for RAR`() {
+    fun `listFiles single file convenience method works for RAR`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-rar5.rar")!!.readAllBytes()
         val tempFile = kotlin.io.path.createTempFile(suffix = ".rar").toFile()
         try {
@@ -147,7 +148,7 @@ class ArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles single file convenience method works for 7z`() {
+    fun `listFiles single file convenience method works for 7z`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test.7z")!!.readAllBytes()
         val tempFile = kotlin.io.path.createTempFile(suffix = ".7z").toFile()
         try {

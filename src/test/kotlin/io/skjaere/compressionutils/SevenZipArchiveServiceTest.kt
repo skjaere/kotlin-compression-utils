@@ -1,8 +1,9 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import java.io.IOException
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -12,7 +13,7 @@ class SevenZipArchiveServiceTest {
     private val service = SevenZipArchiveService()
 
     @Test
-    fun `listFiles parses 7z archive from file path`() {
+    fun `listFiles parses 7z archive from file path`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test.7z")!!.readAllBytes()
         val tempFile = kotlin.io.path.createTempFile(suffix = ".7z").toFile()
         try {
@@ -30,7 +31,7 @@ class SevenZipArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles parses 7z archive from stream`() {
+    fun `listFiles parses 7z archive from stream`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test.7z")!!.readAllBytes()
         val stream = ByteArraySeekableInputStream(archiveBytes)
         val entries = service.listFiles(stream)
@@ -45,7 +46,7 @@ class SevenZipArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles parses multi-file 7z archive with directory`() {
+    fun `listFiles parses multi-file 7z archive with directory`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-multifile.7z")!!.readAllBytes()
         val stream = ByteArraySeekableInputStream(archiveBytes)
         val entries = service.listFiles(stream)
@@ -73,11 +74,11 @@ class SevenZipArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles rejects compressed 7z archive`() {
+    fun `listFiles rejects compressed 7z archive`() = runBlocking {
         val archiveBytes = javaClass.getResourceAsStream("/test-compressed.7z")!!.readAllBytes()
         val stream = ByteArraySeekableInputStream(archiveBytes)
 
-        val exception = assertThrows<IOException> {
+        val exception = assertFailsWith<IOException> {
             service.listFiles(stream)
         }
         assertTrue(

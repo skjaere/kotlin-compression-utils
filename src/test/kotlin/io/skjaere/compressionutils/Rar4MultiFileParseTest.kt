@@ -1,5 +1,6 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -116,20 +117,8 @@ class Rar4MultiFileParseTest {
         return buf.toByteArray()
     }
 
-    /**
-     * Core scenario: A split file spanning 3 volumes (with volumeSizes optimization)
-     * and an additional non-split file in the last volume after the split file ends.
-     *
-     * Volume layout:
-     *   Vol 0: [sig][archHdr][fileHdr bigfile SPLIT_AFTER][data 80B][endArchive]
-     *   Vol 1: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE+AFTER][data 80B][endArchive]
-     *   Vol 2: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE][data 40B][fileHdr small.txt][data 20B][endArchive]
-     *
-     * Without the fix, the parser infers bigfile's split positions from volumeSizes
-     * then breaks, never reaching small.txt in volume 2.
-     */
     @Test
-    fun `parse finds additional files in same volume where split file ends`() {
+    fun `parse finds additional files in same volume where split file ends`() = runBlocking {
         val bigfileTotal = 200
         val bigfileChunk0 = 80
         val bigfileChunk1 = 80
@@ -178,16 +167,8 @@ class Rar4MultiFileParseTest {
         assertEquals(smallSize.toLong(), small.uncompressedSize)
     }
 
-    /**
-     * Additional files exist in a completely new volume after the split file ends.
-     *
-     * Volume layout:
-     *   Vol 0: [sig][archHdr][fileHdr bigfile SPLIT_AFTER][data 100B][endArchive]
-     *   Vol 1: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE][data 50B][endArchive]
-     *   Vol 2: [sig][archHdr][fileHdr extra.txt][data 30B][endArchive]
-     */
     @Test
-    fun `parse finds files in volumes after the split file has ended`() {
+    fun `parse finds files in volumes after the split file has ended`() = runBlocking {
         val bigfileTotal = 150
         val bigfileChunk0 = 100
         val bigfileChunk1 = bigfileTotal - bigfileChunk0 // 50
@@ -232,16 +213,8 @@ class Rar4MultiFileParseTest {
         assertEquals(extraSize.toLong(), extra.uncompressedSize)
     }
 
-    /**
-     * Multiple additional files after the split, spanning multiple volumes.
-     *
-     * Volume layout:
-     *   Vol 0: [sig][archHdr][fileHdr bigfile SPLIT_AFTER][data 80B][endArchive]
-     *   Vol 1: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE][data 20B][fileHdr a.txt][data 10B][fileHdr b.txt][data 15B][endArchive]
-     *   Vol 2: [sig][archHdr][fileHdr c.txt][data 25B][endArchive]
-     */
     @Test
-    fun `parse finds multiple additional files across volumes after split file`() {
+    fun `parse finds multiple additional files across volumes after split file`() = runBlocking {
         val bigfileTotal = 100
         val bigfileChunk0 = 80
         val bigfileChunk1 = bigfileTotal - bigfileChunk0 // 20
@@ -284,12 +257,8 @@ class Rar4MultiFileParseTest {
         assertNotNull(entries.find { it.path == "c.txt" }, "Should find c.txt")
     }
 
-    /**
-     * Without volumeSizes, the parser falls back to parsing each volume header.
-     * This should still find all files.
-     */
     @Test
-    fun `parse finds all files without volumeSizes optimization`() {
+    fun `parse finds all files without volumeSizes optimization`() = runBlocking {
         val bigfileTotal = 200
         val bigfileChunk0 = 80
         val bigfileChunk1 = 80
@@ -330,21 +299,8 @@ class Rar4MultiFileParseTest {
         assertNotNull(entries.find { it.path == "small.txt" })
     }
 
-    /**
-     * Reproduces the real-world bug: when a split file's uncompressedSize accounts
-     * for >= 95% of the total archive, the single-file optimization at line ~403
-     * fires because `fileEntry.isSplit` checks the original entry (which has
-     * `splitParts = emptyList()`), not the copy with inferred parts. This causes
-     * a `break` before the seek-past-inferred-data code ever executes.
-     *
-     * Volume layout (bigfile dominates ~96% of archive):
-     *   Vol 0: [sig][archHdr][fileHdr bigfile SPLIT_AFTER][data 2020B][endArchive]  = 2090 bytes
-     *   Vol 1: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE+AFTER][data 2020B][endArchive]  = 2090 bytes
-     *   Vol 2: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE][data 1960B][fileHdr small.txt][data 20B][endArchive]  = 2091 bytes
-     *   Total archive = 6271 bytes, bigfile = 6000 bytes → 95.7% of archive
-     */
     @Test
-    fun `parse finds additional files when split file dominates archive size`() {
+    fun `parse finds additional files when split file dominates archive size`() = runBlocking {
         val bigfileTotal = 6000
         val bigfileChunk0 = 2020
         val bigfileChunk1 = 2020
@@ -399,29 +355,8 @@ class Rar4MultiFileParseTest {
         assertEquals(smallSize.toLong(), small.uncompressedSize)
     }
 
-    /**
-     * Verifies that inferSplitPositions computes correct byte positions for a split
-     * file that starts MID-VOLUME (not at the beginning of a volume).
-     *
-     * This reproduces the real-world bug where `inferSplitPositions` uses the formula
-     * `firstPartDataStart - 20` to derive the file header block size. This formula
-     * only works when `firstPartDataStart` is a within-volume-0 position. For files
-     * starting mid-volume (like sample.mkv starting after the big mkv data in volume 172),
-     * `firstPartDataStart` is an absolute position in the concatenated stream, making
-     * `firstPartDataStart - 20` produce a nonsensical value.
-     *
-     * Volume layout:
-     *   Vol 0: [sig][archHdr][fileHdr bigfile SPLIT_AFTER][bigfile data 100B][endArchive]         = 170 bytes
-     *   Vol 1: [sig][archHdr][fileHdr bigfile SPLIT_BEFORE][bigfile data 100B]
-     *          [fileHdr midfile SPLIT_AFTER][midfile data 60B][endArchive]                        = 273 bytes
-     *   Vol 2: [sig][archHdr][fileHdr midfile SPLIT_BEFORE][midfile data 90B]
-     *          [fileHdr small.txt][small data 20B][endArchive]                                    = 221 bytes
-     *
-     * midfile starts mid-volume in vol 1 (after bigfile's last chunk).
-     * Its inferred continuation data in vol 2 should start at: vol2_start + 63 (= 7+13+43).
-     */
     @Test
-    fun `parse infers correct split positions for file starting mid-volume`() {
+    fun `parse infers correct split positions for file starting mid-volume`() = runBlocking {
         val bigfileTotal = 200
         val midfileTotal = 150
         val smallSize = 20
@@ -477,8 +412,6 @@ class Rar4MultiFileParseTest {
 
         // Verify inferred positions are correct by reading data from them
         val vol2Start = vol0.size + vol1.size
-        // midfile header in vol 2 is 43 bytes (7+25+11), so data starts at:
-        //   vol2_start + sig(7) + archHdr(13) + fileHdr(43) = vol2_start + 63
         val expectedPart2DataStart = (vol2Start + 63).toLong()
         assertEquals(
             expectedPart2DataStart,

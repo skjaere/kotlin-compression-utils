@@ -1,6 +1,7 @@
 package io.skjaere.compressionutils.generation
 
 import io.skjaere.compressionutils.*
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertContentEquals
@@ -14,7 +15,7 @@ class ArchiveGeneratorTest {
     // --- 7zip single volume ---
 
     @Test
-    fun `7zip single volume round-trip`() {
+    fun `7zip single volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 1, ContainerType.SEVENZIP, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.7z", volumes[0].filename)
@@ -43,7 +44,7 @@ class ArchiveGeneratorTest {
     // --- 7zip multi-volume ---
 
     @Test
-    fun `7zip multi-volume round-trip`() {
+    fun `7zip multi-volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 3, ContainerType.SEVENZIP, testFilename)
         assertEquals(3, volumes.size)
         assertTrue(volumes[0].filename.endsWith(".001"))
@@ -68,7 +69,7 @@ class ArchiveGeneratorTest {
     // --- RAR5 single volume ---
 
     @Test
-    fun `rar5 single volume round-trip`() {
+    fun `rar5 single volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 1, ContainerType.RAR5, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.rar", volumes[0].filename)
@@ -98,7 +99,7 @@ class ArchiveGeneratorTest {
     // --- RAR5 multi-volume ---
 
     @Test
-    fun `rar5 multi-volume round-trip`() {
+    fun `rar5 multi-volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 3, ContainerType.RAR5, testFilename)
         assertEquals(3, volumes.size)
         assertEquals("archive.part1.rar", volumes[0].filename)
@@ -135,7 +136,7 @@ class ArchiveGeneratorTest {
     // --- RAR4 single volume ---
 
     @Test
-    fun `rar4 single volume round-trip`() {
+    fun `rar4 single volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 1, ContainerType.RAR4, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.rar", volumes[0].filename)
@@ -165,7 +166,7 @@ class ArchiveGeneratorTest {
     // --- RAR4 multi-volume ---
 
     @Test
-    fun `rar4 multi-volume round-trip`() {
+    fun `rar4 multi-volume round-trip`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 3, ContainerType.RAR4, testFilename)
         assertEquals(3, volumes.size)
         assertEquals("archive.rar", volumes[0].filename)
@@ -208,7 +209,7 @@ class ArchiveGeneratorTest {
     // 7zip volume-size
 
     @Test
-    fun `7zip volume-size single volume when size exceeds archive`() {
+    fun `7zip volume-size single volume when size exceeds archive`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 100_000L, ContainerType.SEVENZIP, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.7z", volumes[0].filename)
@@ -222,7 +223,7 @@ class ArchiveGeneratorTest {
     }
 
     @Test
-    fun `7zip volume-size multi-volume round-trip`() {
+    fun `7zip volume-size multi-volume round-trip`() = runBlocking {
         val volumeSize = 400L
         val volumes = ArchiveGenerator.generate(testData, volumeSize, ContainerType.SEVENZIP, testFilename)
         assertTrue(volumes.size > 1, "Expected multiple volumes")
@@ -246,7 +247,7 @@ class ArchiveGeneratorTest {
     // RAR5 volume-size
 
     @Test
-    fun `rar5 volume-size single volume when size exceeds archive`() {
+    fun `rar5 volume-size single volume when size exceeds archive`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 100_000L, ContainerType.RAR5, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.rar", volumes[0].filename)
@@ -260,7 +261,7 @@ class ArchiveGeneratorTest {
     }
 
     @Test
-    fun `rar5 volume-size multi-volume round-trip`() {
+    fun `rar5 volume-size multi-volume round-trip`() = runBlocking {
         val volumeSize = 400L
         val volumes = ArchiveGenerator.generate(testData, volumeSize, ContainerType.RAR5, testFilename)
         assertTrue(volumes.size > 1, "Expected multiple volumes")
@@ -296,7 +297,7 @@ class ArchiveGeneratorTest {
     // RAR4 volume-size
 
     @Test
-    fun `rar4 volume-size single volume when size exceeds archive`() {
+    fun `rar4 volume-size single volume when size exceeds archive`() = runBlocking {
         val volumes = ArchiveGenerator.generate(testData, 100_000L, ContainerType.RAR4, testFilename)
         assertEquals(1, volumes.size)
         assertEquals("archive.rar", volumes[0].filename)
@@ -310,7 +311,7 @@ class ArchiveGeneratorTest {
     }
 
     @Test
-    fun `rar4 volume-size multi-volume round-trip`() {
+    fun `rar4 volume-size multi-volume round-trip`() = runBlocking {
         val volumeSize = 400L
         val volumes = ArchiveGenerator.generate(testData, volumeSize, ContainerType.RAR4, testFilename)
         assertTrue(volumes.size > 1, "Expected multiple volumes")
@@ -360,7 +361,7 @@ class ArchiveGeneratorTest {
     }
 
     @Test
-    fun `custom filename preserved`() {
+    fun `custom filename preserved`() = runBlocking {
         val customName = "my-special-file.dat"
         for (type in ContainerType.entries) {
             val volumes = ArchiveGenerator.generate(testData, 1, type, customName)

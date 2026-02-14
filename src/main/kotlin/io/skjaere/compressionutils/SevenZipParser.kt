@@ -51,7 +51,7 @@ class SevenZipParser {
      * @return List of SevenZipFileEntry with metadata and calculated data offsets
      * @throws IOException if the archive is invalid, compressed, or cannot be parsed
      */
-    fun parse(stream: SeekableInputStream): List<SevenZipFileEntry> {
+    suspend fun parse(stream: SeekableInputStream): List<SevenZipFileEntry> {
         val (nextHeaderOffset, nextHeaderSize) = readSignatureHeader(stream)
 
         val metadataStart = SIGNATURE_HEADER_SIZE + nextHeaderOffset
@@ -66,7 +66,7 @@ class SevenZipParser {
 
     private data class SignatureHeader(val nextHeaderOffset: Long, val nextHeaderSize: Long)
 
-    private fun readSignatureHeader(stream: SeekableInputStream): SignatureHeader {
+    private suspend fun readSignatureHeader(stream: SeekableInputStream): SignatureHeader {
         stream.seek(0)
         val header = ByteArray(SIGNATURE_HEADER_SIZE.toInt())
         readFully(stream, header)
@@ -582,7 +582,7 @@ class SevenZipParser {
         readCrcs(buf, count) // just read and discard
     }
 
-    private fun readFully(stream: SeekableInputStream, data: ByteArray) {
+    private suspend fun readFully(stream: SeekableInputStream, data: ByteArray) {
         var offset = 0
         while (offset < data.size) {
             val read = stream.read(data, offset, data.size - offset)

@@ -12,7 +12,7 @@ import java.io.RandomAccessFile
 class BufferedSeekableInputStream(private val inputStream: InputStream) : SeekableInputStream {
     private var currentPosition = 0L
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         val bytesRead = inputStream.read(buffer, offset, length)
         if (bytesRead > 0) {
             currentPosition += bytesRead
@@ -20,7 +20,7 @@ class BufferedSeekableInputStream(private val inputStream: InputStream) : Seekab
         return bytesRead
     }
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         val byte = inputStream.read()
         if (byte != -1) {
             currentPosition++
@@ -28,7 +28,7 @@ class BufferedSeekableInputStream(private val inputStream: InputStream) : Seekab
         return byte
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         if (position < currentPosition) {
             throw IOException("Cannot seek backwards in a non-seekable stream (current: $currentPosition, requested: $position)")
         }
@@ -75,15 +75,15 @@ class BufferedSeekableInputStream(private val inputStream: InputStream) : Seekab
  */
 class FileSeekableInputStream(private val file: RandomAccessFile) : SeekableInputStream {
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         return file.read(buffer, offset, length)
     }
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         return file.read()
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         file.seek(position)
     }
 
@@ -116,7 +116,7 @@ abstract class HttpRangeSeekableInputStream(
      */
     protected abstract fun fetchRange(fromPosition: Long, toPosition: Long): ByteArray
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (currentPosition >= totalSize) {
             return -1
         }
@@ -130,7 +130,7 @@ abstract class HttpRangeSeekableInputStream(
         return data.size
     }
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         if (currentPosition >= totalSize) {
             return -1
         }
@@ -141,7 +141,7 @@ abstract class HttpRangeSeekableInputStream(
         return data[0].toInt() and 0xFF
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         if (position < 0 || position > totalSize) {
             throw IOException("Invalid seek position: $position (size: $totalSize)")
         }

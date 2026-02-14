@@ -6,7 +6,7 @@ package io.skjaere.compressionutils
 class ByteArraySeekableInputStream(private val data: ByteArray) : SeekableInputStream {
     private var pos = 0
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (pos >= data.size) return -1
         val toRead = minOf(length, data.size - pos)
         System.arraycopy(data, pos, buffer, offset, toRead)
@@ -14,12 +14,12 @@ class ByteArraySeekableInputStream(private val data: ByteArray) : SeekableInputS
         return toRead
     }
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         if (pos >= data.size) return -1
         return data[pos++].toInt() and 0xFF
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         pos = position.toInt()
     }
 

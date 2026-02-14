@@ -5,9 +5,12 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  release:
-    uses: skjaere/debridav-ci/.github/workflows/reusable-release-please.yml@main
-    permissions:
-      contents: write
-      pull-requests: write
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4

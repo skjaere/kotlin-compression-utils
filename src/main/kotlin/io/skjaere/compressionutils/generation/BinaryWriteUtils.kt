@@ -44,31 +44,29 @@ internal object BinaryWriteUtils {
 
         // Determine how many extra bytes we need.
         // With numExtra extra bytes, we have (7-numExtra) bits in the first byte
-        // and 8*numExtra bits in the extra bytes, for a total of 7-numExtra + 8*numExtra bits.
+        // and 8*numExtra bits in the extra bytes, for a total of 7+7*numExtra bits.
         var numExtra = 1
         while (numExtra < 8) {
-            val shift = 7 - numExtra
-            val totalBits = shift + 8 * numExtra
+            val totalBits = (7 - numExtra) + 8 * numExtra
             if (value < (1L shl totalBits)) break
             numExtra++
         }
 
         val out = ByteArray(1 + numExtra)
 
-        // The decoder reconstructs: value = firstByteBits | (byte0 << shift) | (byte1 << (shift+8)) | ...
-        // where shift = 7 - numExtra
-        val shift = if (numExtra < 8) 7 - numExtra else 0
-
-        // First byte: numExtra leading 1-bits + value's low 'shift' bits
-        val firstByteMask = (0xFF shl (8 - numExtra)) and 0xFF
-        val firstByteBits = if (shift > 0) (value and ((1L shl shift) - 1)).toInt() else 0
-        out[0] = (firstByteMask or firstByteBits).toByte()
-
-        // Extra bytes: remaining value bits (value >> shift) in LE order
-        val remaining = value ushr shift
+        // Extra bytes: low-order bytes of value in little-endian order
         for (i in 0 until numExtra) {
-            out[1 + i] = ((remaining ushr (8 * i)) and 0xFF).toByte()
+            out[1 + i] = ((value ushr (8 * i)) and 0xFF).toByte()
         }
+
+        // First byte: numExtra leading 1-bits + high-order bits of value
+        val firstByteMask = (0xFF shl (8 - numExtra)) and 0xFF
+        val highBits = if (numExtra < 8) {
+            ((value ushr (8 * numExtra)) and ((1L shl (7 - numExtra)) - 1)).toInt()
+        } else {
+            0
+        }
+        out[0] = (firstByteMask or highBits).toByte()
 
         return out
     }

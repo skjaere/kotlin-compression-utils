@@ -510,7 +510,7 @@ class SevenZipParser {
     private fun readUInt64(buf: ByteBuffer): Long {
         val firstByte = buf.get().toInt() and 0xFF
 
-        // Count leading 1-bits
+        // Count leading 1-bits to determine how many extra bytes follow
         var numExtra = 0
         var test = 0x80
         while (test != 0 && (firstByte and test) != 0) {
@@ -522,19 +522,17 @@ class SevenZipParser {
             return firstByte.toLong()
         }
 
-        // Remaining bits of first byte
-        val valueBitsInFirstByte = if (numExtra < 8) {
-            firstByte and ((1 shl (7 - numExtra)) - 1)
-        } else {
-            0
-        }
-
-        var value = valueBitsInFirstByte.toLong()
-        val shift = if (numExtra < 8) 7 - numExtra else 0
-
+        // Extra bytes form the low-order bytes (little-endian)
+        var value = 0L
         for (i in 0 until numExtra) {
             val b = buf.get().toLong() and 0xFF
-            value = value or (b shl (8 * i + shift))
+            value = value or (b shl (8 * i))
+        }
+
+        // Remaining bits of first byte are the high-order bits
+        if (numExtra < 8) {
+            val highBits = (firstByte and ((1 shl (7 - numExtra)) - 1)).toLong()
+            value = value or (highBits shl (8 * numExtra))
         }
 
         return value

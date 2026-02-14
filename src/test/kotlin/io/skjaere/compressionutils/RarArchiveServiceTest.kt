@@ -1,9 +1,10 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import java.io.ByteArrayInputStream
 import java.io.IOException
+import kotlin.test.assertFailsWith
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -13,23 +14,23 @@ class RarArchiveServiceTest {
     private val service = RarArchiveService()
 
     @Test
-    fun `listFiles throws on invalid data`() {
+    fun `listFiles throws on invalid data`() = runBlocking {
         val invalidData = ByteArray(10) { 0 }
-        assertThrows<IOException> {
+        assertFailsWith<IOException> {
             service.listFiles(ByteArrayInputStream(invalidData))
         }
     }
 
     @Test
-    fun `listFiles throws on too-short data`() {
+    fun `listFiles throws on too-short data`() = runBlocking {
         val shortData = ByteArray(3) { 0x52 }
-        assertThrows<IOException> {
+        assertFailsWith<IOException> {
             service.listFiles(ByteArrayInputStream(shortData))
         }
     }
 
     @Test
-    fun `listFiles parses RAR5 archive from resources`() {
+    fun `listFiles parses RAR5 archive from resources`() = runBlocking {
         val stream = javaClass.getResourceAsStream("/test-rar5.rar")!!
         val entries = service.listFiles(stream)
 
@@ -44,14 +45,14 @@ class RarArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles with maxFiles limits results`() {
+    fun `listFiles with maxFiles limits results`() = runBlocking {
         val stream = javaClass.getResourceAsStream("/test-rar5.rar")!!
         val entries = service.listFiles(stream, maxFiles = 1)
         assertEquals(1, entries.size)
     }
 
     @Test
-    fun `listFiles parses multi-volume RAR5 archive`() {
+    fun `listFiles parses multi-volume RAR5 archive`() = runBlocking {
         val part1 = javaClass.getResourceAsStream("/test-multivolume.part1.rar")!!
         val part2 = javaClass.getResourceAsStream("/test-multivolume.part2.rar")!!
 
@@ -116,7 +117,7 @@ class RarArchiveServiceTest {
     // VolumeMetaData integration tests
 
     @Test
-    fun `listFilesFromConcatenatedStream works with volumeSizes`() {
+    fun `listFilesFromConcatenatedStream works with volumeSizes`() = runBlocking {
         val part1 = javaClass.getResourceAsStream("/test-multivolume.part1.rar")!!
         val part2 = javaClass.getResourceAsStream("/test-multivolume.part2.rar")!!
 

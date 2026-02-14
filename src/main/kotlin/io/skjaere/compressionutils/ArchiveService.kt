@@ -50,7 +50,7 @@ object ArchiveService {
      * @param par2Data Raw PAR2 file data for resolving obfuscated filenames (optional)
      * @return List of ArchiveFileEntry objects (either RarFileEntry or SevenZipFileEntry)
      */
-    fun listFiles(
+    suspend fun listFiles(
         stream: SeekableInputStream,
         volumes: List<VolumeMetaData>,
         par2Data: ByteArray? = null
@@ -86,7 +86,7 @@ object ArchiveService {
      * @param filePath Path to the archive file
      * @return List of ArchiveFileEntry objects
      */
-    fun listFiles(filePath: String): List<ArchiveFileEntry> {
+    suspend fun listFiles(filePath: String): List<ArchiveFileEntry> {
         val file = File(filePath)
         val volume = VolumeMetaData(filename = file.name, size = file.length())
         val stream = FileSeekableInputStream(RandomAccessFile(file, "r"))
@@ -120,7 +120,7 @@ object ArchiveService {
         return KNOWN_EXTENSION_REGEX.containsMatchIn(filename)
     }
 
-    private fun detectArchiveType(
+    private suspend fun detectArchiveType(
         volumes: List<VolumeMetaData>,
         stream: SeekableInputStream
     ): ArchiveTypeDetector.ArchiveType {

@@ -1,5 +1,6 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
@@ -12,7 +13,7 @@ import kotlin.test.assertEquals
 class SeekableInputStreamTest {
 
     @Test
-    fun `BufferedSeekableInputStream tracks position on read`() {
+    fun `BufferedSeekableInputStream tracks position on read`() = runBlocking {
         val data = byteArrayOf(1, 2, 3, 4, 5)
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
 
@@ -26,7 +27,7 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `BufferedSeekableInputStream forward seek works`() {
+    fun `BufferedSeekableInputStream forward seek works`() = runBlocking {
         val data = ByteArray(100) { it.toByte() }
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
 
@@ -36,7 +37,7 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `BufferedSeekableInputStream seek to same position is no-op`() {
+    fun `BufferedSeekableInputStream seek to same position is no-op`() = runBlocking {
         val data = ByteArray(10) { it.toByte() }
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
         stream.seek(5)
@@ -45,12 +46,12 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `BufferedSeekableInputStream backward seek throws`() {
+    fun `BufferedSeekableInputStream backward seek throws`() = runBlocking {
         val data = ByteArray(100) { it.toByte() }
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
         stream.seek(50)
         assertThrows<IOException> {
-            stream.seek(10)
+            runBlocking { stream.seek(10) }
         }
     }
 
@@ -61,7 +62,7 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `BufferedSeekableInputStream returns -1 at end of stream`() {
+    fun `BufferedSeekableInputStream returns -1 at end of stream`() = runBlocking {
         val data = byteArrayOf(1, 2, 3)
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
         stream.read()
@@ -71,7 +72,7 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `FileSeekableInputStream reads and seeks correctly`(@TempDir tempDir: Path) {
+    fun `FileSeekableInputStream reads and seeks correctly`(@TempDir tempDir: Path) = runBlocking {
         val file = tempDir.resolve("test.bin").toFile()
         val data = ByteArray(100) { it.toByte() }
         file.writeBytes(data)

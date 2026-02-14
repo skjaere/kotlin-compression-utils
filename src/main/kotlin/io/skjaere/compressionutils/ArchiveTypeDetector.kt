@@ -100,7 +100,7 @@ object ArchiveTypeDetector {
      * @param stream The stream to read from (position will be reset to 0 after detection)
      * @return A DetectionResult containing the detected archive type and whether it is the first volume
      */
-    fun detect(stream: SeekableInputStream): DetectionResult {
+    suspend fun detect(stream: SeekableInputStream): DetectionResult {
         val originalPosition = stream.position()
         try {
             stream.seek(0)

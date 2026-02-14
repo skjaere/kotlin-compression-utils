@@ -21,9 +21,11 @@ java {
 
 dependencies {
     implementation(libs.slf4j.api)
+    implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlinx.coroutines.test)
     testRuntimeOnly(libs.slf4j.simple)
 }
 

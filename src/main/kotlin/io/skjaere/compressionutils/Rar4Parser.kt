@@ -27,7 +27,7 @@ class Rar4Parser {
          * @param maxFiles Maximum number of files to extract metadata for (null for all)
          * @return List of metadata for each file found in the first volume
          */
-        fun extractMetadata(
+        suspend fun extractMetadata(
             stream: SeekableInputStream,
             maxFiles: Int? = null
         ): List<Rar4FileMetadata> {
@@ -78,7 +78,7 @@ class Rar4Parser {
             return results
         }
 
-        private fun parseFileMetadata(
+        private suspend fun parseFileMetadata(
             stream: SeekableInputStream,
             headerDataPosition: Long,
             headerDataSize: Int,
@@ -232,13 +232,13 @@ class Rar4Parser {
      *                    for split files: byte positions are inferred from volume sizes instead of
      *                    parsing all volume headers. Only works for uncompressed (store) files.
      */
-    fun parse(
+    suspend fun parse(
         stream: SeekableInputStream,
         entries: MutableList<RarFileEntry>,
         maxFiles: Int?,
         volumeIndex: Int,
         archiveSize: Long?,
-        readBytes: (SeekableInputStream, Int) -> ByteArray?,
+        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?,
         volumeSizes: List<Long>? = null
     ) {
         stream.seek(7) // Skip signature
@@ -519,13 +519,13 @@ class Rar4Parser {
         return parts
     }
 
-    private fun parseFileHeader(
+    private suspend fun parseFileHeader(
         stream: SeekableInputStream,
         headerDataPosition: Long,
         headerDataSize: Int,
         flags: Int,
         volumeIndex: Int,
-        readBytes: (SeekableInputStream, Int) -> ByteArray?
+        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?
     ): RarFileEntry? {
         val headerData = readBytes(stream, headerDataSize) ?: return null
         val buffer = ByteBuffer.wrap(headerData).order(ByteOrder.LITTLE_ENDIAN)

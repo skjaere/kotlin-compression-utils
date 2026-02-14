@@ -40,7 +40,7 @@ class ConcatenatedFileSeekableInputStream(files: List<File>) : SeekableInputStre
         return lo
     }
 
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (currentPosition >= totalSize) return -1
         var totalRead = 0
         var bufOffset = offset
@@ -66,7 +66,7 @@ class ConcatenatedFileSeekableInputStream(files: List<File>) : SeekableInputStre
         return if (totalRead == 0) -1 else totalRead
     }
 
-    override fun read(): Int {
+    override suspend fun read(): Int {
         if (currentPosition >= totalSize) return -1
         val volIndex = findVolumeIndex(currentPosition)
         val localPos = currentPosition - cumulativeOffsets[volIndex]
@@ -77,7 +77,7 @@ class ConcatenatedFileSeekableInputStream(files: List<File>) : SeekableInputStre
         return b
     }
 
-    override fun seek(position: Long) {
+    override suspend fun seek(position: Long) {
         currentPosition = position
     }
 

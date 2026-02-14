@@ -21,13 +21,13 @@ class Rar5Parser {
         private const val RAR5_FILE_FLAG_SPLIT_AFTER = 0x10   // File continues in next volume
     }
 
-    fun parse(
+    suspend fun parse(
         stream: SeekableInputStream,
         entries: MutableList<RarFileEntry>,
         maxFiles: Int?,
         volumeIndex: Int,
         archiveSize: Long?,
-        readBytes: (SeekableInputStream, Int) -> ByteArray?
+        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?
     ) {
         stream.seek(8) // Skip signature
         var foundEndArchive = false
@@ -229,14 +229,14 @@ class Rar5Parser {
         }
     }
 
-    private fun parseFileHeader(
+    private suspend fun parseFileHeader(
         stream: SeekableInputStream,
         headerDataPosition: Long,
         headerFlags: Long,
         remainingSize: Long,
         volumeIndex: Int,
         dataAreaSize: Long,
-        readBytes: (SeekableInputStream, Int) -> ByteArray?
+        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?
     ): RarFileEntry? {
         val headerData = readBytes(stream, remainingSize.toInt()) ?: return null
         val buffer = ByteBuffer.wrap(headerData).order(ByteOrder.LITTLE_ENDIAN)
@@ -311,7 +311,7 @@ class Rar5Parser {
         }
     }
 
-    private fun readVInt(stream: SeekableInputStream): Pair<Long, Long>? {
+    private suspend fun readVInt(stream: SeekableInputStream): Pair<Long, Long>? {
         var value = 0L
         var bytesRead = 0L
 

@@ -74,7 +74,7 @@ class RarArchiveService {
         when {
             isRar5 -> {
                 logger.debug("Detected RAR 5.x archive (volume $volumeIndex)")
-                rar5Parser.parse(stream, entries, maxFiles, volumeIndex, archiveSize, ::readBytes)
+                rar5Parser.parse(stream, entries, maxFiles, volumeIndex, archiveSize, ::readBytes, volumeSizes)
             }
 
             isRar4 -> {

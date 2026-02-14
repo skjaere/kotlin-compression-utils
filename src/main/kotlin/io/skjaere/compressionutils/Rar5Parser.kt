@@ -27,12 +27,17 @@ class Rar5Parser {
         maxFiles: Int?,
         volumeIndex: Int,
         archiveSize: Long?,
-        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?
+        readBytes: suspend (SeekableInputStream, Int) -> ByteArray?,
+        volumeSizes: List<Long>? = null
     ) {
         stream.seek(8) // Skip signature
         var foundEndArchive = false
         val seenFiles = mutableSetOf<String>() // Track files we've already added (multi-volume archives repeat headers)
         val fileSplitInfo = mutableMapOf<String, MutableList<SplitInfo>>() // Track split parts for each file
+        var currentVolumeIndex = volumeIndex
+        var mainHeaderBlockSize = 0L // Total size of main archive header block
+        var skipRemainingVolumes = false
+        var inferredSplitParts: List<SplitInfo>? = null
 
         while (true) {
             // Stop if we've reached the max file limit
@@ -44,7 +49,20 @@ class Rar5Parser {
 
             // After end-of-archive, check if we hit a new RAR signature (start of next volume)
             val headerSize: Long
+            val headerSizeVintBytes: Long
             if (foundEndArchive) {
+                // If we've inferred positions for split files, seek past the inferred data and continue parsing
+                if (skipRemainingVolumes && inferredSplitParts != null) {
+                    val lastPart = inferredSplitParts.last()
+                    val seekPosition = lastPart.dataStartPosition + lastPart.dataSize
+                    currentVolumeIndex = lastPart.volumeIndex
+                    stream.seek(seekPosition)
+                    skipRemainingVolumes = false
+                    inferredSplitParts = null
+                    foundEndArchive = false
+                    logger.debug("Skipped to end of inferred split data at position $seekPosition (volume $currentVolumeIndex), continuing to parse remaining files")
+                    continue
+                }
                 logger.debug("After end-of-archive, checking for RAR signature at position $headerStartPosition")
                 val possibleSig = readBytes(stream, 8)
                 if (possibleSig == null) {
@@ -56,7 +74,8 @@ class Rar5Parser {
 
                 val rar5Sig = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A.toByte(), 0x07, 0x01, 0x00)
                 if (possibleSig.contentEquals(rar5Sig)) {
-                    logger.debug("Found RAR5 signature at position $headerStartPosition - continuing to next volume")
+                    currentVolumeIndex++
+                    logger.debug("Found RAR5 signature at position $headerStartPosition - continuing to volume $currentVolumeIndex")
                     foundEndArchive = false
                     continue // Skip signature and continue parsing next volume
                 }
@@ -85,7 +104,8 @@ class Rar5Parser {
                         if (restOfSig != null && rar5SigStart.sliceArray(sigStart.size until rar5SigStart.size)
                                 .contentEquals(restOfSig)
                         ) {
-                            logger.debug("Confirmed RAR5 signature after $firstNonZero bytes of padding")
+                            currentVolumeIndex++
+                            logger.debug("Confirmed RAR5 signature after $firstNonZero bytes of padding - continuing to volume $currentVolumeIndex")
                             foundEndArchive = false
                             continue
                         }
@@ -111,6 +131,7 @@ class Rar5Parser {
                 // Read header size (vint)
                 val headerSizeResult = readVInt(stream) ?: break
                 headerSize = headerSizeResult.first
+                headerSizeVintBytes = headerSizeResult.second
             }
 
             // Read header type (vint)
@@ -158,15 +179,18 @@ class Rar5Parser {
                             headerDataPosition,
                             headerFlags,
                             remainingHeaderSize,
-                            volumeIndex,
+                            currentVolumeIndex,
                             dataAreaSize,
                             readBytes
                         )
                     if (fileEntry != null) {
                         // Track split information
                         val dataStartPos = headerDataPosition + remainingHeaderSize
+                        // For uncompressed files, if data area is smaller than total size, the file is split
+                        val isSplitAfter = fileEntry.compressionMethod == 0 && dataAreaSize < fileEntry.uncompressedSize
+
                         val splitInfo = SplitInfo(
-                            volumeIndex = volumeIndex,
+                            volumeIndex = currentVolumeIndex,
                             dataStartPosition = dataStartPos,
                             dataSize = dataAreaSize
                         )
@@ -175,16 +199,36 @@ class Rar5Parser {
 
                         // Only add if we haven't seen this file path before (multi-volume archives repeat headers)
                         if (seenFiles.add(fileEntry.path)) {
-                            // For the first occurrence, add with current split info
-                            val entryWithSplits = fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
-                            entries.add(entryWithSplits)
-                            logger.debug("Found file: ${fileEntry.path} at position $headerStartPosition, split=${fileEntry.isSplit}")
+                            // Check if we can infer remaining split positions from volume sizes
+                            if (isSplitAfter && volumeSizes != null && fileEntry.compressionMethod == 0) {
+                                val fileHeaderBlockSize = 4L + headerSizeVintBytes + headerSize
+                                val continuationHeaderSize = 8L + mainHeaderBlockSize + fileHeaderBlockSize
+                                val inferredParts = inferSplitPositions(
+                                    fileEntry = fileEntry,
+                                    firstPartDataStart = dataStartPos,
+                                    firstPartDataSize = dataAreaSize,
+                                    currentVolumeIndex = currentVolumeIndex,
+                                    volumeSizes = volumeSizes,
+                                    continuationHeaderSize = continuationHeaderSize
+                                )
+                                val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
+                                entries.add(entryWithSplits)
+                                logger.debug("Found split file: ${fileEntry.path}, inferred ${inferredParts.size} parts from volume sizes")
+
+                                skipRemainingVolumes = true
+                                inferredSplitParts = inferredParts
+                            } else {
+                                // For the first occurrence, add with current split info
+                                val entryWithSplits = fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
+                                entries.add(entryWithSplits)
+                                logger.debug("Found file: ${fileEntry.path} at position $headerStartPosition, split=${fileEntry.isSplit}")
+                            }
 
                             // Optimization: if this single uncompressed file accounts for ~all of the archive,
                             // don't bother looking for more headers
                             // NOTE: Only apply to volume 0 - for multi-volume archives, the file may be larger than
                             // a single volume but split across many volumes
-                            if (volumeIndex == 0 && archiveSize != null && entries.size == 1 && fileEntry.compressionMethod == 0 && !fileEntry.isSplit) {
+                            if (currentVolumeIndex == 0 && archiveSize != null && entries.size == 1 && fileEntry.compressionMethod == 0 && !isSplitAfter) {
                                 val expectedDataSize = archiveSize * 0.95
                                 if (fileEntry.uncompressedSize >= expectedDataSize) {
                                     logger.debug("Single file accounts for entire volume, stopping parse")
@@ -192,12 +236,14 @@ class Rar5Parser {
                                 }
                             }
                         } else {
-                            // Update existing entry with accumulated split info
-                            val existingIndex = entries.indexOfFirst { it.path == fileEntry.path }
-                            if (existingIndex >= 0) {
-                                entries[existingIndex] =
-                                    entries[existingIndex].copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
-                                logger.debug("Updated split info for: ${fileEntry.path}, parts=${fileSplitInfo[fileEntry.path]!!.size}")
+                            // Update existing entry with accumulated split info (only if not using inferred positions)
+                            if (!skipRemainingVolumes) {
+                                val existingIndex = entries.indexOfFirst { it.path == fileEntry.path }
+                                if (existingIndex >= 0) {
+                                    entries[existingIndex] =
+                                        entries[existingIndex].copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
+                                    logger.debug("Updated split info for: ${fileEntry.path}, parts=${fileSplitInfo[fileEntry.path]!!.size}")
+                                }
                             }
                         }
                     }
@@ -211,7 +257,8 @@ class Rar5Parser {
                 }
 
                 RAR5_HEAD_MAIN -> {
-                    logger.debug("Found main archive header at position $headerStartPosition")
+                    mainHeaderBlockSize = 4L + headerSizeVintBytes + headerSize + dataAreaSize
+                    logger.debug("Found main archive header at position $headerStartPosition, blockSize=$mainHeaderBlockSize")
                 }
 
                 RAR5_HEAD_SERVICE -> {
@@ -309,6 +356,85 @@ class Rar5Parser {
             logger.error("Error parsing RAR5 file header", e)
             return null
         }
+    }
+
+    /**
+     * Infers split positions for a file spanning multiple RAR5 volumes based on volume sizes.
+     *
+     * For uncompressed (store) files, the data is simply split across volumes. Each continuation
+     * volume has a fixed structure:
+     * - RAR5 signature (8 bytes) + main archive header + file header
+     * - Data: file content
+     * - End-of-archive marker
+     *
+     * @param fileEntry The file entry parsed from the first volume
+     * @param firstPartDataStart Absolute position where data starts in the first part
+     * @param firstPartDataSize Size of data in the first part
+     * @param currentVolumeIndex Index of the current volume (where this file starts)
+     * @param volumeSizes List of all volume sizes
+     * @param continuationHeaderSize Combined header size for continuation volumes
+     *        (RAR5 signature + main header block + file header block)
+     * @return List of SplitInfo for all parts of this file
+     */
+    private fun inferSplitPositions(
+        fileEntry: RarFileEntry,
+        firstPartDataStart: Long,
+        firstPartDataSize: Long,
+        currentVolumeIndex: Int,
+        volumeSizes: List<Long>,
+        continuationHeaderSize: Long
+    ): List<SplitInfo> {
+        val parts = mutableListOf<SplitInfo>()
+        var remainingBytes = fileEntry.uncompressedSize
+        var cumulativeOffset = 0L
+
+        // Calculate cumulative offset up to current volume
+        for (i in 0 until currentVolumeIndex) {
+            cumulativeOffset += volumeSizes[i]
+        }
+
+        // Calculate actual end-of-archive size from the current volume's layout
+        val localDataStart = firstPartDataStart - cumulativeOffset
+        val firstVolumeSize = volumeSizes[currentVolumeIndex]
+        val endOfArchiveSize = firstVolumeSize - localDataStart - firstPartDataSize
+
+        for (volIdx in currentVolumeIndex until volumeSizes.size) {
+            if (remainingBytes <= 0) break
+
+            val volumeSize = volumeSizes[volIdx]
+            val dataStartPosition: Long
+            val availableDataSpace: Long
+
+            if (volIdx == currentVolumeIndex) {
+                // First part: use actual parsed position and size
+                dataStartPosition = firstPartDataStart
+                availableDataSpace = firstPartDataSize
+            } else {
+                // Continuation volumes: fixed header size + data + fixed footer
+                dataStartPosition = cumulativeOffset + continuationHeaderSize
+                availableDataSpace = maxOf(0L, volumeSize - continuationHeaderSize - endOfArchiveSize)
+            }
+
+            val dataSize = minOf(remainingBytes, availableDataSpace)
+
+            parts.add(
+                SplitInfo(
+                    volumeIndex = volIdx,
+                    dataStartPosition = dataStartPosition,
+                    dataSize = dataSize
+                )
+            )
+            logger.debug("Inferred RAR5 part $volIdx: start=$dataStartPosition, size=$dataSize, remaining=${remainingBytes - dataSize}")
+
+            remainingBytes -= dataSize
+            cumulativeOffset += volumeSize
+        }
+
+        if (remainingBytes > 0) {
+            logger.warn("Could not fit all file data: $remainingBytes bytes remaining after ${volumeSizes.size} volumes")
+        }
+
+        return parts
     }
 
     private suspend fun readVInt(stream: SeekableInputStream): Pair<Long, Long>? {

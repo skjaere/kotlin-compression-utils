@@ -1,6 +1,8 @@
 package io.skjaere.compressionutils
 
 import org.slf4j.LoggerFactory
+import org.tukaani.xz.LZMAInputStream
+import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -9,11 +11,73 @@ import java.nio.ByteOrder
  * Native parser for 7z archive metadata. Reads the binary format directly
  * without requiring any native/JNI dependencies.
  *
- * Only supports uncompressed (store-mode / Copy codec) archives. Archives with
- * compressed headers or compressed file data will be rejected with a clear error.
+ * Only supports uncompressed (store-mode / Copy codec) file data. Archives with
+ * compressed file data will be rejected with a clear error. LZMA-compressed
+ * metadata headers (EncodedHeader) are supported, which is the standard format
+ * produced by 7-Zip even for store-mode archives.
  */
 class SevenZipParser {
     private val logger = LoggerFactory.getLogger(SevenZipParser::class.java)
+
+    /**
+     * Parses a 7z archive and returns its file entries.
+     *
+     * @param stream A SeekableInputStream positioned at the start of the archive
+     * @return List of SevenZipFileEntry with metadata and calculated data offsets
+     * @throws IOException if the archive is invalid, compressed, or cannot be parsed
+     */
+    suspend fun parse(stream: SeekableInputStream): List<SevenZipFileEntry> {
+        val (nextHeaderOffset, nextHeaderSize) = readSignatureHeader(stream)
+
+        val metadataStart = SIGNATURE_HEADER_SIZE + nextHeaderOffset
+        stream.seek(metadataStart)
+
+        val metadataBytes = ByteArray(nextHeaderSize.toInt())
+        readFully(stream, metadataBytes)
+
+        val buf = ByteBuffer.wrap(metadataBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val propertyId = readByte(buf)
+
+        return when (propertyId) {
+            kHeader -> parseHeaderBody(buf)
+            kEncodedHeader -> {
+                val decodedBuf = decodeEncodedHeader(stream, buf)
+                val innerPropertyId = readByte(decodedBuf)
+                if (innerPropertyId != kHeader) {
+                    throw IOException(
+                        "Expected kHeader (0x01) inside EncodedHeader, found: 0x${innerPropertyId.toString(16)}"
+                    )
+                }
+                parseHeaderBody(decodedBuf)
+            }
+            else -> throw IOException(
+                "Expected kHeader (0x01) or kEncodedHeader (0x17), found: 0x${propertyId.toString(16)}"
+            )
+        }
+    }
+
+    private data class SignatureHeader(val nextHeaderOffset: Long, val nextHeaderSize: Long)
+
+    private suspend fun readSignatureHeader(stream: SeekableInputStream): SignatureHeader {
+        stream.seek(0)
+        val header = ByteArray(SIGNATURE_HEADER_SIZE.toInt())
+        readFully(stream, header)
+
+        // Validate magic bytes
+        for (i in MAGIC.indices) {
+            if (header[i] != MAGIC[i]) {
+                throw IOException("Not a valid 7z archive: incorrect magic bytes")
+            }
+        }
+
+        val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+        buf.position(12) // Skip magic (6) + version (2) + start header CRC (4)
+        val nextHeaderOffset = buf.getLong()
+        val nextHeaderSize = buf.getLong()
+
+        logger.debug("Signature header: nextHeaderOffset=$nextHeaderOffset, nextHeaderSize=$nextHeaderSize")
+        return SignatureHeader(nextHeaderOffset, nextHeaderSize)
+    }
 
     companion object {
         private val MAGIC = byteArrayOf(0x37, 0x7A, 0xBC.toByte(), 0xAF.toByte(), 0x27, 0x1C)
@@ -40,66 +104,85 @@ class SevenZipParser {
         private const val kEncodedHeader = 0x17
         private const val kDummy = 0x19
 
-        // Copy codec ID (uncompressed)
+        // Codec IDs
         private val COPY_CODEC_ID = byteArrayOf(0x00)
+        private val LZMA_CODEC_ID = byteArrayOf(0x03, 0x01, 0x01)
     }
 
     /**
-     * Parses a 7z archive and returns its file entries.
+     * Decodes an EncodedHeader by reading its StreamsInfo, locating the packed
+     * header data in the archive, and decompressing it if needed.
      *
-     * @param stream A SeekableInputStream positioned at the start of the archive
-     * @return List of SevenZipFileEntry with metadata and calculated data offsets
-     * @throws IOException if the archive is invalid, compressed, or cannot be parsed
+     * Supports Copy (uncompressed) and LZMA codecs for the encoded header.
      */
-    suspend fun parse(stream: SeekableInputStream): List<SevenZipFileEntry> {
-        val (nextHeaderOffset, nextHeaderSize) = readSignatureHeader(stream)
+    private suspend fun decodeEncodedHeader(
+        stream: SeekableInputStream,
+        buf: ByteBuffer
+    ): ByteBuffer {
+        val streamsInfo = parseMainStreamsInfo(buf)
 
-        val metadataStart = SIGNATURE_HEADER_SIZE + nextHeaderOffset
-        stream.seek(metadataStart)
+        val packInfo = streamsInfo.packInfo
+            ?: throw IOException("EncodedHeader missing PackInfo")
+        val unpackInfo = streamsInfo.unpackInfo
+            ?: throw IOException("EncodedHeader missing UnPackInfo")
 
-        val metadataBytes = ByteArray(nextHeaderSize.toInt())
-        readFully(stream, metadataBytes)
+        if (unpackInfo.folders.isEmpty()) {
+            throw IOException("EncodedHeader has no folders")
+        }
 
-        val buf = ByteBuffer.wrap(metadataBytes).order(ByteOrder.LITTLE_ENDIAN)
-        return parseHeader(buf)
-    }
+        val folder = unpackInfo.folders[0]
+        val packedSize = packInfo.packSizes[0].toInt()
+        val unpackedSize = unpackInfo.unpackSizes[0]
+        val packedOffset = SIGNATURE_HEADER_SIZE + packInfo.packPos
 
-    private data class SignatureHeader(val nextHeaderOffset: Long, val nextHeaderSize: Long)
+        logger.debug("EncodedHeader: codec={}, offset={}, packedSize={}, unpackedSize={}",
+            folder.codecId.joinToString("") { "%02x".format(it) },
+            packedOffset, packedSize, unpackedSize)
 
-    private suspend fun readSignatureHeader(stream: SeekableInputStream): SignatureHeader {
-        stream.seek(0)
-        val header = ByteArray(SIGNATURE_HEADER_SIZE.toInt())
-        readFully(stream, header)
+        stream.seek(packedOffset)
+        val packedData = ByteArray(packedSize)
+        readFully(stream, packedData)
 
-        // Validate magic bytes
-        for (i in MAGIC.indices) {
-            if (header[i] != MAGIC[i]) {
-                throw IOException("Not a valid 7z archive: incorrect magic bytes")
+        val headerData = when {
+            folder.codecId.contentEquals(COPY_CODEC_ID) -> packedData
+
+            folder.codecId.contentEquals(LZMA_CODEC_ID) -> {
+                val props = folder.properties
+                    ?: throw IOException("LZMA codec in EncodedHeader missing properties")
+                decompressLzma(packedData, props, unpackedSize)
+            }
+
+            else -> {
+                val codecHex = folder.codecId.joinToString("") { "%02x".format(it) }
+                throw IOException(
+                    "Unsupported codec in encoded 7z header: 0x$codecHex; " +
+                        "only Copy and LZMA are supported"
+                )
             }
         }
 
-        val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
-        buf.position(12) // Skip magic (6) + version (2) + start header CRC (4)
-        val nextHeaderOffset = buf.getLong()
-        val nextHeaderSize = buf.getLong()
-
-        logger.debug("Signature header: nextHeaderOffset=$nextHeaderOffset, nextHeaderSize=$nextHeaderSize")
-        return SignatureHeader(nextHeaderOffset, nextHeaderSize)
+        return ByteBuffer.wrap(headerData).order(ByteOrder.LITTLE_ENDIAN)
     }
 
-    private fun parseHeader(buf: ByteBuffer): List<SevenZipFileEntry> {
-        val propertyId = readByte(buf)
-
-        if (propertyId == kEncodedHeader) {
-            throw IOException(
-                "Compressed 7z headers are not supported; only uncompressed/store-mode archives can be parsed"
-            )
+    private fun decompressLzma(data: ByteArray, properties: ByteArray, uncompressedSize: Long): ByteArray {
+        // Build LZMA alone format: properties (5 bytes) + uncompressed size (8 bytes LE) + compressed data
+        val lzmaAloneHeader = ByteBuffer.allocate(13).order(ByteOrder.LITTLE_ENDIAN)
+        lzmaAloneHeader.put(properties)
+        lzmaAloneHeader.putLong(uncompressedSize)
+        val lzmaStream = ByteArrayInputStream(lzmaAloneHeader.array() + data)
+        return LZMAInputStream(lzmaStream).use { lzma ->
+            val result = ByteArray(uncompressedSize.toInt())
+            var offset = 0
+            while (offset < result.size) {
+                val read = lzma.read(result, offset, result.size - offset)
+                if (read == -1) break
+                offset += read
+            }
+            result
         }
+    }
 
-        if (propertyId != kHeader) {
-            throw IOException("Expected kHeader (0x01) or kEncodedHeader (0x17), found: 0x${propertyId.toString(16)}")
-        }
-
+    private fun parseHeaderBody(buf: ByteBuffer): List<SevenZipFileEntry> {
         var packInfo: PackInfo? = null
         var unpackInfo: UnpackInfo? = null
         var subStreamsInfo: SubStreamsInfo? = null
@@ -117,6 +200,16 @@ class SevenZipParser {
                     packInfo = streamsResult.packInfo
                     unpackInfo = streamsResult.unpackInfo
                     subStreamsInfo = streamsResult.subStreamsInfo
+
+                    // Validate that all file data folders use the Copy codec
+                    unpackInfo?.folders?.forEach { folder ->
+                        if (!folder.codecId.contentEquals(COPY_CODEC_ID)) {
+                            val codecHex = folder.codecId.joinToString("") { "%02x".format(it) }
+                            throw IOException(
+                                "Only uncompressed 7z archives are supported; found codec: 0x$codecHex"
+                            )
+                        }
+                    }
                 }
                 kFilesInfo -> {
                     val filesResult = parseFilesInfo(buf, packInfo, unpackInfo, subStreamsInfo)
@@ -142,7 +235,7 @@ class SevenZipParser {
 
     private data class PackInfo(val packPos: Long, val numPackStreams: Int, val packSizes: LongArray)
 
-    private data class FolderInfo(val codecId: ByteArray, val numCoders: Int)
+    private data class FolderInfo(val codecId: ByteArray, val numCoders: Int, val properties: ByteArray? = null)
 
     private data class UnpackInfo(val folders: List<FolderInfo>, val unpackSizes: LongArray)
 
@@ -250,21 +343,16 @@ class SevenZipParser {
             throw IOException("Complex coder configurations are not supported")
         }
 
+        var properties: ByteArray? = null
         if (hasAttributes) {
-            // Read and skip properties size + properties data
             val propsSize = readUInt64(buf).toInt()
+            properties = ByteArray(propsSize)
             for (i in 0 until propsSize) {
-                buf.get()
+                properties[i] = buf.get()
             }
         }
 
-        // Validate it's Copy codec
-        if (!codecId.contentEquals(COPY_CODEC_ID)) {
-            val codecHex = codecId.joinToString("") { "%02x".format(it) }
-            throw IOException("Only uncompressed 7z archives are supported; found codec: 0x$codecHex")
-        }
-
-        return FolderInfo(codecId, numCoders)
+        return FolderInfo(codecId, numCoders, properties)
     }
 
     private fun parseSubStreamsInfo(buf: ByteBuffer, unpackInfo: UnpackInfo?): SubStreamsInfo {

@@ -5,6 +5,11 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.security.MessageDigest
 
+sealed interface ListFilesResult {
+    data class Success(val entries: List<ArchiveFileEntry>) : ListFilesResult
+    data object UnsupportedFormat : ListFilesResult
+}
+
 /**
  * Unified top-level API for listing files in archive volumes.
  *
@@ -54,7 +59,7 @@ object ArchiveService {
         stream: SeekableInputStream,
         volumes: List<VolumeMetaData>,
         par2Data: ByteArray? = null
-    ): List<ArchiveFileEntry> {
+    ): ListFilesResult {
         val resolvedVolumes = resolveVolumes(volumes, par2Data)
 
         val archiveType = detectArchiveType(resolvedVolumes, stream)
@@ -63,19 +68,21 @@ object ArchiveService {
         return when (archiveType) {
             ArchiveTypeDetector.ArchiveType.RAR4,
             ArchiveTypeDetector.ArchiveType.RAR5 -> {
-                rarArchiveService.listFilesFromConcatenatedStream(
-                    stream = stream,
-                    totalArchiveSize = resolvedVolumes.sumOf { it.size },
-                    volumeSizes = resolvedVolumes.map { it.size }
+                ListFilesResult.Success(
+                    rarArchiveService.listFilesFromConcatenatedStream(
+                        stream = stream,
+                        totalArchiveSize = resolvedVolumes.sumOf { it.size },
+                        volumeSizes = resolvedVolumes.map { it.size }
+                    )
                 )
             }
 
             ArchiveTypeDetector.ArchiveType.SEVENZIP -> {
-                sevenZipArchiveService.listFiles(stream)
+                ListFilesResult.Success(sevenZipArchiveService.listFiles(stream))
             }
 
             ArchiveTypeDetector.ArchiveType.UNKNOWN -> {
-                throw java.io.IOException("Unable to detect archive type from filenames or byte signatures")
+                ListFilesResult.UnsupportedFormat
             }
         }
     }
@@ -86,7 +93,7 @@ object ArchiveService {
      * @param filePath Path to the archive file
      * @return List of ArchiveFileEntry objects
      */
-    suspend fun listFiles(filePath: String): List<ArchiveFileEntry> {
+    suspend fun listFiles(filePath: String): ListFilesResult {
         val file = File(filePath)
         val volume = VolumeMetaData(filename = file.name, size = file.length())
         val stream = FileSeekableInputStream(RandomAccessFile(file, "r"))

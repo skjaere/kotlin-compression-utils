@@ -128,9 +128,7 @@ object Par2Parser {
             }
 
             if (headerRead == 0) break // Couldn't find magic after skipping padding
-            if (headerRead < HEADER_SIZE) {
-                throw Par2ParseException("Incomplete packet header: read $headerRead bytes, expected $HEADER_SIZE")
-            }
+            if (headerRead < HEADER_SIZE) break // Truncated data — return results collected so far
 
             // Verify magic
             val readMagic = header.sliceArray(0 until 8)
@@ -161,9 +159,7 @@ object Par2Parser {
             val body = if (bodySize > 0) {
                 val bodyBytes = ByteArray(bodySize)
                 val bodyRead = input.readNBytes(bodyBytes, 0, bodySize)
-                if (bodyRead < bodySize) {
-                    throw Par2ParseException("Incomplete packet body: read $bodyRead bytes, expected $bodySize")
-                }
+                if (bodyRead < bodySize) break // Truncated data — return results collected so far
                 bodyBytes
             } else {
                 ByteArray(0)
@@ -188,6 +184,27 @@ object Par2Parser {
      * Parses a PAR2 file from a byte array.
      */
     fun parse(data: ByteArray): Par2Info = parse(data.inputStream())
+
+    /**
+     * Returns true if [data] starts with the PAR2 magic bytes (`PAR2\0PKT`).
+     */
+    fun isPar2(data: ByteArray): Boolean {
+        if (data.size < MAGIC.size) return false
+        return data.sliceArray(0 until MAGIC.size).contentEquals(MAGIC)
+    }
+
+    /**
+     * Returns true if [data] contains at least one FileDesc packet.
+     * Handles truncated data gracefully (e.g. 16KB preview of a large recovery volume
+     * will return false because the first packet body can't be fully read).
+     */
+    fun hasFileDescriptions(data: ByteArray): Boolean {
+        return try {
+            parse(data).files.isNotEmpty()
+        } catch (_: Par2ParseException) {
+            false
+        }
+    }
 
     /**
      * Parses only the file descriptions from a PAR2 stream, returning a map of

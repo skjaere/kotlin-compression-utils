@@ -2,6 +2,7 @@ package io.skjaere.compressionutils.validation
 
 import io.skjaere.compressionutils.ArchiveFileEntry
 import io.skjaere.compressionutils.ArchiveService
+import io.skjaere.compressionutils.ListFilesResult
 import io.skjaere.compressionutils.RarFileEntry
 import io.skjaere.compressionutils.SevenZipFileEntry
 import io.skjaere.compressionutils.VolumeMetaData
@@ -62,7 +63,15 @@ object ArchiveValidator {
         // Step 4: Parse with library
         val volumeMetadata = volumes.map { VolumeMetaData(filename = it.name, size = it.length()) }
         val stream = ConcatenatedFileSeekableInputStream(volumes)
-        val entries = stream.use { ArchiveService.listFiles(it, volumeMetadata, par2Data) }
+        val listFilesResult = stream.use { ArchiveService.listFiles(it, volumeMetadata, par2Data) }
+        val entries = when (listFilesResult) {
+            is ListFilesResult.Success -> listFilesResult.entries
+            is ListFilesResult.UnsupportedFormat -> {
+                System.err.println("Unable to detect archive type from filenames or byte signatures")
+                System.exit(1)
+                return@runBlocking // unreachable but needed for type inference
+            }
+        }
 
         println("Library found ${entries.size} entries:")
         entries.forEach { entry ->

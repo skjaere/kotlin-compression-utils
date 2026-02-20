@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.0...v0.2.1) (2026-02-20)
+
+
+### Bug Fixes
+
+* fixing bug parsing 7zip volumes with compressed headers ([31521a2](https://github.com/skjaere/kotlin-compression-utils/commit/31521a2870522f46b3f92e38f519ea627cf2e78c))
+
 ## [0.2.0](https://github.com/skjaere/kotlin-compression-utils/compare/v0.1.0...v0.2.0) (2026-02-14)
 
 

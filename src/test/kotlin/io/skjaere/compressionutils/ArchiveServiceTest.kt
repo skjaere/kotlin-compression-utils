@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ArchiveServiceTest {
@@ -65,7 +66,8 @@ class ArchiveServiceTest {
             VolumeMetaData(filename = "test-rar5.rar", size = archiveBytes.size.toLong())
         )
 
-        val entries = ArchiveService.listFiles(stream, volumes)
+        val result = ArchiveService.listFiles(stream, volumes)
+        val entries = assertIs<ListFilesResult.Success>(result).entries
 
         assertTrue(entries.isNotEmpty(), "Should find at least one file")
         val firstEntry = entries[0] as RarFileEntry
@@ -83,7 +85,8 @@ class ArchiveServiceTest {
             VolumeMetaData(filename = "test.7z", size = archiveBytes.size.toLong())
         )
 
-        val entries = ArchiveService.listFiles(stream, volumes)
+        val result = ArchiveService.listFiles(stream, volumes)
+        val entries = assertIs<ListFilesResult.Success>(result).entries
 
         assertTrue(entries.isNotEmpty(), "Should find at least one file")
         val firstEntry = entries[0] as SevenZipFileEntry
@@ -100,7 +103,8 @@ class ArchiveServiceTest {
             VolumeMetaData(filename = "test-multifile.7z", size = archiveBytes.size.toLong())
         )
 
-        val entries = ArchiveService.listFiles(stream, volumes)
+        val result = ArchiveService.listFiles(stream, volumes)
+        val entries = assertIs<ListFilesResult.Success>(result).entries
 
         assertEquals(3, entries.size, "Should find 3 entries (1 dir + 2 files)")
         val dirEntry = entries.find { (it as SevenZipFileEntry).path == "testdir" } as SevenZipFileEntry
@@ -124,7 +128,8 @@ class ArchiveServiceTest {
             )
         )
 
-        val entries = ArchiveService.listFiles(stream, volumes)
+        val result = ArchiveService.listFiles(stream, volumes)
+        val entries = assertIs<ListFilesResult.Success>(result).entries
 
         assertTrue(entries.isNotEmpty(), "Should find at least one file via byte signature detection")
         val firstEntry = entries[0] as RarFileEntry
@@ -137,7 +142,8 @@ class ArchiveServiceTest {
         val tempFile = kotlin.io.path.createTempFile(suffix = ".rar").toFile()
         try {
             tempFile.writeBytes(archiveBytes)
-            val entries = ArchiveService.listFiles(tempFile.absolutePath)
+            val result = ArchiveService.listFiles(tempFile.absolutePath)
+            val entries = assertIs<ListFilesResult.Success>(result).entries
 
             assertTrue(entries.isNotEmpty())
             val firstEntry = entries[0] as RarFileEntry
@@ -153,7 +159,8 @@ class ArchiveServiceTest {
         val tempFile = kotlin.io.path.createTempFile(suffix = ".7z").toFile()
         try {
             tempFile.writeBytes(archiveBytes)
-            val entries = ArchiveService.listFiles(tempFile.absolutePath)
+            val result = ArchiveService.listFiles(tempFile.absolutePath)
+            val entries = assertIs<ListFilesResult.Success>(result).entries
 
             assertTrue(entries.isNotEmpty())
             val firstEntry = entries[0] as SevenZipFileEntry

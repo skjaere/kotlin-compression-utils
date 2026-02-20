@@ -74,9 +74,17 @@ class Par2ParserTest {
     }
 
     @Test
-    fun `parse throws on invalid data`() {
-        val invalidData = byteArrayOf(0x50, 0x41, 0x52, 0x32, 0x00, 0x50, 0x4B, 0x54, // magic
+    fun `parse returns empty result for truncated header`() {
+        val truncatedData = byteArrayOf(0x50, 0x41, 0x52, 0x32, 0x00, 0x50, 0x4B, 0x54, // magic
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00) // truncated header
+        val result = Par2Parser.parse(truncatedData)
+        assertTrue(result.files.isEmpty())
+    }
+
+    @Test
+    fun `parse throws on invalid magic`() {
+        val invalidData = byteArrayOf(0x50, 0x41, 0x52, 0x32, 0x00, 0x00, 0x00, 0x00, // bad magic
+            *ByteArray(56)) // rest of "header"
         assertThrows<Par2ParseException> {
             Par2Parser.parse(invalidData)
         }

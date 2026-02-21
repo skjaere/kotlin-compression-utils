@@ -5,6 +5,7 @@ import io.skjaere.compressionutils.ArchiveService
 import io.skjaere.compressionutils.ListFilesResult
 import io.skjaere.compressionutils.RarFileEntry
 import io.skjaere.compressionutils.SevenZipFileEntry
+import io.skjaere.compressionutils.TranslatedFileEntry
 import io.skjaere.compressionutils.VolumeMetaData
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -87,6 +88,12 @@ object ArchiveValidator {
                     }
                 }
                 is SevenZipFileEntry -> println("  [7z]  ${entry.path} (${entry.size} bytes, method=${entry.method}, dataOffset=${entry.dataOffset})")
+                is TranslatedFileEntry -> {
+                    println("  [Translated] ${entry.path} (${entry.size} bytes, ${entry.splitParts.size} split(s))")
+                    entry.splitParts.forEach { part ->
+                        println("    part: dataStart=${part.dataStartPosition}, dataSize=${part.dataSize}")
+                    }
+                }
             }
         }
         println()
@@ -119,6 +126,7 @@ object ArchiveValidator {
             when (entry) {
                 is RarFileEntry -> entry.path.replace('\\', '/')
                 is SevenZipFileEntry -> entry.path
+                is TranslatedFileEntry -> entry.path
             }
         }.toSet()
 
@@ -152,6 +160,7 @@ object ArchiveValidator {
         return when (entry) {
             is RarFileEntry -> validateRarEntry(entry, crcMap, volumes)
             is SevenZipFileEntry -> validateSevenZipEntry(entry, crcMap, volumes)
+            is TranslatedFileEntry -> ValidationResult.Skipped(entry.path, "translated entry (nested archive)")
         }
     }
 

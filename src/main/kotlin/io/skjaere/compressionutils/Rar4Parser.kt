@@ -595,6 +595,11 @@ class Rar4Parser {
             logger.debug("File '$fileName' is split: before=$isSplitBefore, after=$isSplitAfter")
         }
 
+        // RAR4 spec: for files split across volumes, the CRC field contains the CRC
+        // of packed data within the current volume, not the whole file CRC.
+        // Only use the CRC for non-split files where it represents the full file CRC.
+        val wholeCrc = if (isSplit) null else fileCrc.toLong() and 0xFFFFFFFFL
+
         return RarFileEntry(
             path = fileName.replace('\\', '/'),
             uncompressedSize = fullUnpackSize,
@@ -605,7 +610,7 @@ class Rar4Parser {
             volumeIndex = volumeIndex,
             compressionMethod = compressionMethod,
             splitParts = emptyList(), // Will be populated by caller
-            crc32 = fileCrc.toLong() and 0xFFFFFFFFL
+            crc32 = wholeCrc
         )
     }
 }

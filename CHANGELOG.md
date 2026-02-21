@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.1...v0.2.2) (2026-02-20)
+
+
+### Bug Fixes
+
+* support detecting par2 files from bytes ([0f70d6a](https://github.com/skjaere/kotlin-compression-utils/commit/0f70d6aac29f66b15caaf7f36eaa34c67d794c95))
+
 ## [0.2.1](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.0...v0.2.1) (2026-02-20)
 
 

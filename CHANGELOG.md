@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.2...v0.3.0) (2026-02-22)
+
+
+### Features
+
+* supporting nested archives ([b075656](https://github.com/skjaere/kotlin-compression-utils/commit/b0756566cedfd6392da1a278466d8f93287c5b6e))
+
+
+### Bug Fixes
+
+* fixing incorrect crc32 values for split rar4 archives ([3f77921](https://github.com/skjaere/kotlin-compression-utils/commit/3f7792180f9c5a00258840723fcd06c1d9513e58))
+
 ## [0.2.2](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.1...v0.2.2) (2026-02-20)
 
 

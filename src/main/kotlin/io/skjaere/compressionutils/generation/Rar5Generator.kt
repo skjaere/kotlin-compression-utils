@@ -155,6 +155,96 @@ internal object Rar5Generator {
         return volumes
     }
 
+    fun generateMultiFile(files: List<ArchiveFile>, volumeSize: Long): List<ArchiveVolume> {
+        val mainHeader = buildMainHeader()
+        val endHeader = buildEndHeader()
+        val fixedOverhead = SIGNATURE.size + mainHeader.size + endHeader.size
+
+        // Check if everything fits in a single volume
+        val totalSingleVolumeSize = fixedOverhead + files.sumOf { file ->
+            val header = buildFileHeader(file.data, file.filename, FILE_FLAG_HAS_CRC)
+            (header.size + file.data.size).toLong()
+        }
+
+        if (totalSingleVolumeSize <= volumeSize) {
+            val out = ByteArrayOutputStream()
+            out.writeBytes(SIGNATURE)
+            out.writeBytes(mainHeader)
+            for (file in files) {
+                out.writeBytes(buildFileHeader(file.data, file.filename, FILE_FLAG_HAS_CRC))
+                out.writeBytes(file.data)
+            }
+            out.writeBytes(endHeader)
+            return listOf(ArchiveVolume("archive.rar", out.toByteArray()))
+        }
+
+        return generateMultiVolumeMultiFile(files, volumeSize, fixedOverhead, mainHeader, endHeader)
+    }
+
+    private fun generateMultiVolumeMultiFile(
+        files: List<ArchiveFile>,
+        volumeSize: Long,
+        fixedOverhead: Int,
+        mainHeader: ByteArray,
+        endHeader: ByteArray
+    ): List<ArchiveVolume> {
+        val volumes = mutableListOf<ArchiveVolume>()
+        var fileIdx = 0
+        var fileOffset = 0
+        var volIdx = 0
+
+        while (fileIdx < files.size) {
+            val vol = ByteArrayOutputStream()
+            vol.writeBytes(SIGNATURE)
+            vol.writeBytes(mainHeader)
+
+            var remaining = volumeSize - fixedOverhead
+
+            while (fileIdx < files.size && remaining > 0) {
+                val file = files[fileIdx]
+                val isFirstChunk = fileOffset == 0
+                val dataRemaining = file.data.size - fileOffset
+
+                // Build trial header with worst-case flags (SPLIT_AFTER) to get upper bound on header size
+                var trialFlags = FILE_FLAG_HAS_CRC or FILE_FLAG_SPLIT_AFTER
+                if (!isFirstChunk) trialFlags = trialFlags or FILE_FLAG_SPLIT_BEFORE
+
+                val trialHeader = buildFileHeader(file.data, file.filename, trialFlags, remaining)
+                val availableForData = remaining - trialHeader.size
+                if (availableForData <= 0) break // can't fit even a header
+
+                val chunkSize = minOf(availableForData.toInt(), dataRemaining)
+                val isLastChunk = fileOffset + chunkSize >= file.data.size
+
+                // Build actual header with correct flags
+                var fileFlags = FILE_FLAG_HAS_CRC
+                if (!isFirstChunk) fileFlags = fileFlags or FILE_FLAG_SPLIT_BEFORE
+                if (!isLastChunk) fileFlags = fileFlags or FILE_FLAG_SPLIT_AFTER
+
+                val actualHeader = buildFileHeader(file.data, file.filename, fileFlags, chunkSize.toLong())
+
+                vol.writeBytes(actualHeader)
+                vol.write(file.data, fileOffset, chunkSize)
+                remaining -= actualHeader.size + chunkSize
+
+                fileOffset += chunkSize
+                if (isLastChunk) {
+                    fileIdx++
+                    fileOffset = 0
+                } else {
+                    break // file split, continue in next volume
+                }
+            }
+
+            vol.writeBytes(endHeader)
+            val volFilename = "archive.part${volIdx + 1}.rar"
+            volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
+            volIdx++
+        }
+
+        return volumes
+    }
+
     /** Build a RAR5 header block: CRC32(4) + body. CRC32 covers everything from headerSize onward. */
     private fun buildHeader(type: Int, headerFlags: Long, bodyContent: ByteArray, dataSize: Long?): ByteArray {
         // Build the inner content (everything after CRC32): headerSize(vint) + type(vint) + flags(vint) + [extra/data sizes] + body

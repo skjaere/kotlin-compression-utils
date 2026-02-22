@@ -201,15 +201,14 @@ class Rar5Parser {
                         if (seenFiles.add(fileEntry.path)) {
                             // Check if we can infer remaining split positions from volume sizes
                             if (isSplitAfter && volumeSizes != null && fileEntry.compressionMethod == 0) {
-                                val fileHeaderBlockSize = 4L + headerSizeVintBytes + headerSize
-                                val continuationHeaderSize = 8L + mainHeaderBlockSize + fileHeaderBlockSize
                                 val inferredParts = inferSplitPositions(
                                     fileEntry = fileEntry,
                                     firstPartDataStart = dataStartPos,
                                     firstPartDataSize = dataAreaSize,
                                     currentVolumeIndex = currentVolumeIndex,
                                     volumeSizes = volumeSizes,
-                                    continuationHeaderSize = continuationHeaderSize
+                                    mainHeaderBlockSize = mainHeaderBlockSize,
+                                    firstPartHeaderContentSize = headerSize
                                 )
                                 val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
                                 entries.add(entryWithSplits)
@@ -362,18 +361,21 @@ class Rar5Parser {
      * Infers split positions for a file spanning multiple RAR5 volumes based on volume sizes.
      *
      * For uncompressed (store) files, the data is simply split across volumes. Each continuation
-     * volume has a fixed structure:
-     * - RAR5 signature (8 bytes) + main archive header + file header
-     * - Data: file content
+     * volume has a structure:
+     * - RAR5 signature (8 bytes) + main archive header + file header (variable size) + data
      * - End-of-archive marker
+     *
+     * The file header size varies per volume because the data size is encoded as a vint,
+     * and shorter data chunks require fewer vint bytes, shrinking the header by 1-2 bytes.
      *
      * @param fileEntry The file entry parsed from the first volume
      * @param firstPartDataStart Absolute position where data starts in the first part
      * @param firstPartDataSize Size of data in the first part
      * @param currentVolumeIndex Index of the current volume (where this file starts)
      * @param volumeSizes List of all volume sizes
-     * @param continuationHeaderSize Combined header size for continuation volumes
-     *        (RAR5 signature + main header block + file header block)
+     * @param mainHeaderBlockSize Size of the main archive header block (CRC + headerSize vint + content)
+     * @param firstPartHeaderContentSize The headerContent size from the first part's file header
+     *        (type vint + flags vint + dataSize vint + body)
      * @return List of SplitInfo for all parts of this file
      */
     private fun inferSplitPositions(
@@ -382,7 +384,8 @@ class Rar5Parser {
         firstPartDataSize: Long,
         currentVolumeIndex: Int,
         volumeSizes: List<Long>,
-        continuationHeaderSize: Long
+        mainHeaderBlockSize: Long,
+        firstPartHeaderContentSize: Long
     ): List<SplitInfo> {
         val parts = mutableListOf<SplitInfo>()
         var remainingBytes = fileEntry.uncompressedSize
@@ -398,35 +401,41 @@ class Rar5Parser {
         val firstVolumeSize = volumeSizes[currentVolumeIndex]
         val endOfArchiveSize = firstVolumeSize - localDataStart - firstPartDataSize
 
+        // Derive the constant file header body size (fileFlags, unpackedSize, attributes, CRC, etc.)
+        // headerContent = type_vint(1) + flags_vint(1) + dataSizeVint + body
+        val firstPartDataSizeVintLen = vintLength(firstPartDataSize)
+        val fileHeaderBodySize = firstPartHeaderContentSize - 2 - firstPartDataSizeVintLen
+
         for (volIdx in currentVolumeIndex until volumeSizes.size) {
             if (remainingBytes <= 0) break
 
             val volumeSize = volumeSizes[volIdx]
-            val dataStartPosition: Long
-            val availableDataSpace: Long
 
             if (volIdx == currentVolumeIndex) {
                 // First part: use actual parsed position and size
-                dataStartPosition = firstPartDataStart
-                availableDataSpace = firstPartDataSize
+                val dataSize = minOf(remainingBytes, firstPartDataSize)
+                parts.add(SplitInfo(volIdx, firstPartDataStart, dataSize))
+                logger.debug("Inferred RAR5 part $volIdx: start=$firstPartDataStart, size=$dataSize, remaining=${remainingBytes - dataSize}")
+                remainingBytes -= dataSize
             } else {
-                // Continuation volumes: fixed header size + data + fixed footer
-                dataStartPosition = cumulativeOffset + continuationHeaderSize
-                availableDataSpace = maxOf(0L, volumeSize - continuationHeaderSize - endOfArchiveSize)
+                // Continuation volumes: compute header size dynamically
+                val spaceForFileAndData = volumeSize - 8 - mainHeaderBlockSize - endOfArchiveSize
+                val (maxHeaderBlockSize, maxData) = computeContinuationLayout(spaceForFileAndData, fileHeaderBodySize)
+                val dataSize = minOf(remainingBytes, maxData)
+
+                // Recompute header size for actual data size (vint may be shorter for small chunks)
+                val actualHeaderBlockSize = if (dataSize < maxData) {
+                    computeFileHeaderBlockSize(dataSize, fileHeaderBodySize)
+                } else {
+                    maxHeaderBlockSize
+                }
+
+                val dataStartPosition = cumulativeOffset + 8 + mainHeaderBlockSize + actualHeaderBlockSize
+                parts.add(SplitInfo(volIdx, dataStartPosition, dataSize))
+                logger.debug("Inferred RAR5 part $volIdx: start=$dataStartPosition, size=$dataSize, remaining=${remainingBytes - dataSize}")
+                remainingBytes -= dataSize
             }
 
-            val dataSize = minOf(remainingBytes, availableDataSpace)
-
-            parts.add(
-                SplitInfo(
-                    volumeIndex = volIdx,
-                    dataStartPosition = dataStartPosition,
-                    dataSize = dataSize
-                )
-            )
-            logger.debug("Inferred RAR5 part $volIdx: start=$dataStartPosition, size=$dataSize, remaining=${remainingBytes - dataSize}")
-
-            remainingBytes -= dataSize
             cumulativeOffset += volumeSize
         }
 
@@ -435,6 +444,53 @@ class Rar5Parser {
         }
 
         return parts
+    }
+
+    /**
+     * Computes the file header block size and max data space for a continuation volume.
+     * Solves iteratively since the data size vint encoding depends on the data value.
+     */
+    private fun computeContinuationLayout(totalSpace: Long, bodySize: Long): Pair<Long, Long> {
+        // File header block = CRC(4) + headerSizeVint + type(1) + flags(1) + dataSizeVint + body
+        // Initial estimate with 2-byte dataSizeVint (common for data > 127 bytes)
+        var dataSizeVintLen = 2L
+        var headerBlockSize = computeFileHeaderBlockSizeWithVintLen(dataSizeVintLen, bodySize)
+        var dataSize = totalSpace - headerBlockSize
+
+        // Refine: check if actual vint length matches our assumption
+        if (dataSize > 0) {
+            val actualVintLen = vintLength(dataSize)
+            if (actualVintLen != dataSizeVintLen) {
+                headerBlockSize = computeFileHeaderBlockSizeWithVintLen(actualVintLen, bodySize)
+                dataSize = totalSpace - headerBlockSize
+            }
+        }
+
+        return Pair(headerBlockSize, maxOf(0L, dataSize))
+    }
+
+    /**
+     * Computes the file header block size for a known data size.
+     */
+    private fun computeFileHeaderBlockSize(dataSize: Long, bodySize: Long): Long {
+        return computeFileHeaderBlockSizeWithVintLen(vintLength(dataSize), bodySize)
+    }
+
+    private fun computeFileHeaderBlockSizeWithVintLen(dataSizeVintLen: Long, bodySize: Long): Long {
+        val headerContentSize = 2L + dataSizeVintLen + bodySize // type(1) + flags(1) + dataSizeVint + body
+        val headerSizeVintLen = vintLength(headerContentSize)
+        return 4L + headerSizeVintLen + headerContentSize // CRC(4) + headerSizeVint + headerContent
+    }
+
+    private fun vintLength(value: Long): Long {
+        if (value <= 0) return 1
+        var v = value
+        var len = 0L
+        do {
+            len++
+            v = v ushr 7
+        } while (v > 0)
+        return len
     }
 
     private suspend fun readVInt(stream: SeekableInputStream): Pair<Long, Long>? {

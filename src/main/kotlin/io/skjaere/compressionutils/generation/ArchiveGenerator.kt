@@ -35,4 +35,20 @@ object ArchiveGenerator {
             ContainerType.SEVENZIP -> SevenZipGenerator.generateWithVolumeSize(data, volumeSize, filename)
         }
     }
+
+    fun generate(
+        files: List<ArchiveFile>,
+        volumeSize: Long,
+        containerType: ContainerType
+    ): List<ArchiveVolume> {
+        require(volumeSize > 0) { "volumeSize must be > 0" }
+        require(files.isNotEmpty()) { "files must not be empty" }
+
+        return when (containerType) {
+            ContainerType.RAR5 -> Rar5Generator.generateMultiFile(files, volumeSize)
+            else -> throw UnsupportedOperationException(
+                "Multi-file generation not supported for $containerType"
+            )
+        }
+    }
 }

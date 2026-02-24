@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.0...v0.3.1) (2026-02-24)
+
+
+### Bug Fixes
+
+* read RAR5 split flags from block-level header, not file flags ([bdd85e0](https://github.com/skjaere/kotlin-compression-utils/commit/bdd85e0aa05e0012aa8c10081817d5beb517be93))
+
 ## [0.3.0](https://github.com/skjaere/kotlin-compression-utils/compare/v0.2.2...v0.3.0) (2026-02-22)
 
 

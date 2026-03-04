@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.1...v0.3.2) (2026-03-04)
+
+
+### Bug Fixes
+
+* correct RAR5 split position inference for non-minimal vint encoding ([602f1d8](https://github.com/skjaere/kotlin-compression-utils/commit/602f1d858ab0eb7942a25329a092588e632e38ae))
+
 ## [0.3.1](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.0...v0.3.1) (2026-02-24)
 
 

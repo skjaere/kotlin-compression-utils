@@ -159,9 +159,11 @@ class Rar5Parser {
 
             // Read data area size if present
             var dataAreaSize = 0L
+            var dataAreaSizeVintLen = 0L
             if (headerFlags and 0x02L != 0L) { // Has data
                 val dataSizeResult = readVInt(stream) ?: break
                 dataAreaSize = dataSizeResult.first
+                dataAreaSizeVintLen = dataSizeResult.second
                 headerBytesConsumed += dataSizeResult.second
             }
 
@@ -211,6 +213,7 @@ class Rar5Parser {
                             // Multi-file archives have varying service/end-of-archive sections per volume
                             // that make position inference unreliable.
                             if (isSplitAfter && volumeSizes != null && fileEntry.compressionMethod == 0 && entries.isEmpty()) {
+                                val fixedOverheadVintBytes = headerBytesConsumed - dataAreaSizeVintLen
                                 val inferredParts = inferSplitPositions(
                                     fileEntry = fileEntry,
                                     firstPartDataStart = dataStartPos,
@@ -218,7 +221,9 @@ class Rar5Parser {
                                     currentVolumeIndex = currentVolumeIndex,
                                     volumeSizes = volumeSizes,
                                     mainHeaderBlockSize = mainHeaderBlockSize,
-                                    firstPartHeaderContentSize = headerSize,
+                                    fixedOverheadVintBytes = fixedOverheadVintBytes,
+                                    fileBodySize = remainingHeaderSize,
+                                    actualDataSizeVintLen = dataAreaSizeVintLen,
                                     mainHeaderIsVolume = mainHeaderIsVolume,
                                     mainHeaderHasVolumeNumber = mainHeaderHasVolumeNumber
                                 )
@@ -393,7 +398,14 @@ class Rar5Parser {
      * Infers split positions for a store-mode file spanning multiple RAR5 volumes.
      *
      * Each continuation volume has: signature(8) + main header + file header + data + service + end-of-archive.
-     * The file header size varies per volume because the data size vint encoding changes.
+     *
+     * The file header content is: fixedOverhead (type + flags + [extraAreaSize]) + dataAreaSizeVint + fileBody.
+     * The fixedOverhead and fileBody are constant across volumes; only the dataAreaSize vint varies.
+     *
+     * Uses the observed dataAreaSize vint length from the first volume rather than computing minimal
+     * encoding via vintLength(), since real RAR encoders may pad vints to a fixed width.
+     * For the last (partial) volume, detects whether the encoder uses padded vints to choose the
+     * correct vint length for the smaller data size.
      *
      * Only reliable when the file fills all remaining volumes (single-file-per-archive pattern).
      */
@@ -404,7 +416,9 @@ class Rar5Parser {
         currentVolumeIndex: Int,
         volumeSizes: List<Long>,
         mainHeaderBlockSize: Long,
-        firstPartHeaderContentSize: Long,
+        fixedOverheadVintBytes: Long,
+        fileBodySize: Long,
+        actualDataSizeVintLen: Long,
         mainHeaderIsVolume: Boolean,
         mainHeaderHasVolumeNumber: Boolean
     ): List<SplitInfo> {
@@ -420,8 +434,8 @@ class Rar5Parser {
         val localDataStart = firstPartDataStart - cumulativeOffset
         val endOfArchiveSize = volumeSizes[currentVolumeIndex] - localDataStart - firstPartDataSize
 
-        // File header body size (constant across volumes): everything except type + flags + dataSizeVint
-        val fileHeaderBodySize = firstPartHeaderContentSize - 2 - vintLength(firstPartDataSize)
+        // Detect whether the encoder uses padded (non-minimal) vint encoding for dataAreaSize
+        val isPaddedVint = actualDataSizeVintLen > vintLength(firstPartDataSize)
 
         for (volIdx in currentVolumeIndex until volumeSizes.size) {
             if (remainingBytes <= 0) break
@@ -433,29 +447,46 @@ class Rar5Parser {
                 remainingBytes -= dataSize
             } else {
                 // Continuation volumes may have a volume number vint that volume 0 lacks.
-                // RAR5 main header flags: 0x01 = isVolume, 0x02 = "volume number field present".
-                // If volume 0 is marked as a volume (0x01) but lacks volume number (not 0x02),
-                // continuation volumes will add the volume number field.
-                // If volume 0 is NOT marked as a volume at all, continuation volumes won't add it either.
                 val continuationMainHeaderExtra = if (mainHeaderIsVolume && !mainHeaderHasVolumeNumber) {
                     vintLength(volIdx.toLong())
                 } else {
                     0L
                 }
                 val contMainHeaderBlockSize = mainHeaderBlockSize + continuationMainHeaderExtra
-                val spaceForFileAndData = volumeSize - 8 - contMainHeaderBlockSize - endOfArchiveSize
-                val (maxHeaderBlockSize, maxData) = computeContinuationLayout(spaceForFileAndData, fileHeaderBodySize)
-                val dataSize = minOf(remainingBytes, maxData)
 
-                val actualHeaderBlockSize = if (dataSize < maxData) {
-                    computeFileHeaderBlockSize(dataSize, fileHeaderBodySize)
+                // For the last volume in the archive, the end-of-archive section may differ
+                // from volume 0 (e.g., different service block size, no zero padding).
+                // Use remainingBytes directly instead of computing maxData from endOfArchiveSize.
+                val isLastVolume = volIdx == volumeSizes.size - 1
+
+                if (isLastVolume && remainingBytes > 0) {
+                    val vintLen = if (isPaddedVint) actualDataSizeVintLen else vintLength(remainingBytes)
+                    val headerBlockSize = computeHeaderBlockSize(fixedOverheadVintBytes, vintLen, fileBodySize)
+                    val dataStartPosition = cumulativeOffset + 8 + contMainHeaderBlockSize + headerBlockSize
+                    parts.add(SplitInfo(volIdx, dataStartPosition, remainingBytes))
+                    remainingBytes = 0
                 } else {
-                    maxHeaderBlockSize
-                }
+                    val totalSpace = volumeSize - 8 - contMainHeaderBlockSize - endOfArchiveSize
 
-                val dataStartPosition = cumulativeOffset + 8 + contMainHeaderBlockSize + actualHeaderBlockSize
-                parts.add(SplitInfo(volIdx, dataStartPosition, dataSize))
-                remainingBytes -= dataSize
+                    // Compute layout: header block size and available data, iterating to account
+                    // for the circular dependency between data size and dataAreaSize vint length.
+                    val (fileHeaderBlockSize, maxData) = computeContinuationLayout(
+                        totalSpace, fixedOverheadVintBytes, fileBodySize,
+                        actualDataSizeVintLen, isPaddedVint
+                    )
+                    val dataSize = minOf(remainingBytes, maxData)
+
+                    val actualHeaderBlockSize = if (dataSize < maxData && !isPaddedVint) {
+                        // Partial fill with minimal-vint encoder: recompute for actual data size
+                        computeHeaderBlockSize(fixedOverheadVintBytes, vintLength(dataSize), fileBodySize)
+                    } else {
+                        fileHeaderBlockSize
+                    }
+
+                    val dataStartPosition = cumulativeOffset + 8 + contMainHeaderBlockSize + actualHeaderBlockSize
+                    parts.add(SplitInfo(volIdx, dataStartPosition, dataSize))
+                    remainingBytes -= dataSize
+                }
             }
 
             cumulativeOffset += volumeSize
@@ -467,27 +498,35 @@ class Rar5Parser {
         return parts
     }
 
-    private fun computeContinuationLayout(totalSpace: Long, bodySize: Long): Pair<Long, Long> {
-        var dataSizeVintLen = 2L
-        var headerBlockSize = computeFileHeaderBlockSizeWithVintLen(dataSizeVintLen, bodySize)
+    /**
+     * Iteratively computes the file header block size and available data space for a continuation volume.
+     * Handles the circular dependency: data size determines the dataAreaSize vint length,
+     * which determines the header size, which determines available data space.
+     */
+    private fun computeContinuationLayout(
+        totalSpace: Long,
+        fixedOverhead: Long,
+        fileBody: Long,
+        startingVintLen: Long,
+        isPaddedVint: Boolean
+    ): Pair<Long, Long> {
+        var dataSizeVintLen = startingVintLen
+        var headerBlockSize = computeHeaderBlockSize(fixedOverhead, dataSizeVintLen, fileBody)
         var dataSize = totalSpace - headerBlockSize
 
-        if (dataSize > 0) {
+        if (!isPaddedVint && dataSize > 0) {
             val actualVintLen = vintLength(dataSize)
             if (actualVintLen != dataSizeVintLen) {
-                headerBlockSize = computeFileHeaderBlockSizeWithVintLen(actualVintLen, bodySize)
+                dataSizeVintLen = actualVintLen
+                headerBlockSize = computeHeaderBlockSize(fixedOverhead, dataSizeVintLen, fileBody)
                 dataSize = totalSpace - headerBlockSize
             }
         }
         return Pair(headerBlockSize, maxOf(0L, dataSize))
     }
 
-    private fun computeFileHeaderBlockSize(dataSize: Long, bodySize: Long): Long {
-        return computeFileHeaderBlockSizeWithVintLen(vintLength(dataSize), bodySize)
-    }
-
-    private fun computeFileHeaderBlockSizeWithVintLen(dataSizeVintLen: Long, bodySize: Long): Long {
-        val headerContentSize = 2L + dataSizeVintLen + bodySize
+    private fun computeHeaderBlockSize(fixedOverheadVintBytes: Long, dataSizeVintLen: Long, fileBodySize: Long): Long {
+        val headerContentSize = fixedOverheadVintBytes + dataSizeVintLen + fileBodySize
         val headerSizeVintLen = vintLength(headerContentSize)
         return 4L + headerSizeVintLen + headerContentSize
     }

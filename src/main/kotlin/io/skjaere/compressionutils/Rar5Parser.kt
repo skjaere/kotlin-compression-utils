@@ -232,7 +232,10 @@ class Rar5Parser {
                                 val fillsAllVolumes = lastPart.volumeIndex >= volumeSizes.size - 1
 
                                 if (fillsAllVolumes) {
-                                    val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
+                                    // Clear CRC: RAR5 stores a running CRC per volume, and the
+                                    // infer path skips continuation headers so we only have vol 0's
+                                    // partial CRC, not the full file CRC from the last volume.
+                                    val entryWithSplits = fileEntry.copy(splitParts = inferredParts, crc32 = null)
                                     entries.add(entryWithSplits)
                                     logger.debug("Found split file: ${fileEntry.path}, inferred ${inferredParts.size} parts (fills all volumes)")
                                     skipRemainingVolumes = true
@@ -266,9 +269,15 @@ class Rar5Parser {
                             if (!skipRemainingVolumes) {
                                 val existingIndex = entries.indexOfFirst { it.path == fileEntry.path }
                                 if (existingIndex >= 0) {
+                                    // Also update CRC: RAR5 stores a running CRC in each volume's
+                                    // header, so only the last volume has the full file CRC.
+                                    val updatedCrc = fileEntry.crc32 ?: entries[existingIndex].crc32
                                     entries[existingIndex] =
-                                        entries[existingIndex].copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
-                                    logger.debug("Updated split info for: ${fileEntry.path}, parts=${fileSplitInfo[fileEntry.path]!!.size}")
+                                        entries[existingIndex].copy(
+                                            splitParts = fileSplitInfo[fileEntry.path]!!.toList(),
+                                            crc32 = updatedCrc
+                                        )
+                                    logger.debug("Updated split info for: ${fileEntry.path}, parts=${fileSplitInfo[fileEntry.path]!!.size}, crc=${updatedCrc}")
                                 }
                             }
                         }

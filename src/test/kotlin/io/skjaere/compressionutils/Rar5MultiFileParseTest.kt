@@ -725,4 +725,135 @@ class Rar5MultiFileParseTest {
         assertEquals(expectedCrc, actualCrc.value,
             "CRC mismatch — last volume end-of-archive size difference not handled correctly")
     }
+
+    @Test
+    fun `split file CRC updated to last volume CRC in normal parsing path`() = runBlocking {
+        // RAR5 stores a running CRC in each volume's file header.
+        // When the parser walks all headers (normal path, not infer), it should use the
+        // CRC from the LAST volume (the full file CRC), not the first volume's running CRC.
+        //
+        // This archive has a split file that does NOT fill all volumes (triggers normal parsing).
+        val totalSize = 300
+        val fileData = ByteArray(totalSize) { (it % 251).toByte() }
+        val smallSize = 30
+
+        val chunk0 = 200
+        val chunk1 = totalSize - chunk0
+
+        // Compute running CRCs like a real RAR encoder would
+        val crc0 = CRC32().also { it.update(fileData, 0, chunk0) }.value
+        val fullCrc = CRC32().also { it.update(fileData) }.value
+        assertTrue(crc0 != fullCrc, "Running CRC and full CRC should differ")
+
+        val vol0 = buildVolume(
+            buildMainHeader(isVolume = true),
+            buildFileBlock(
+                "bigfile.dat", dataSize = chunk0, unpackedSize = totalSize,
+                splitAfter = true, data = fileData.sliceArray(0 until chunk0),
+                crc32 = crc0
+            ),
+            buildEndOfArchive()
+        )
+
+        val vol1 = buildVolume(
+            buildMainHeader(isVolume = true, hasVolumeNumber = true, volumeNumber = 1),
+            buildFileBlock(
+                "bigfile.dat", dataSize = chunk1, unpackedSize = totalSize,
+                splitBefore = true,
+                data = fileData.sliceArray(chunk0 until totalSize),
+                crc32 = fullCrc
+            ),
+            buildFileBlock("small.txt", dataSize = smallSize, unpackedSize = smallSize),
+            buildEndOfArchive()
+        )
+
+        // Third volume ensures bigfile doesn't fill all volumes (prevents infer path)
+        val vol2 = buildVolume(
+            buildMainHeader(isVolume = true, hasVolumeNumber = true, volumeNumber = 2),
+            buildFileBlock("extra.txt", dataSize = 20, unpackedSize = 20),
+            buildEndOfArchive()
+        )
+
+        val concatenated = vol0 + vol1 + vol2
+        val stream = ByteArraySeekableInputStream(concatenated)
+        val volumeSizes = listOf(vol0.size.toLong(), vol1.size.toLong(), vol2.size.toLong())
+
+        val entries = service.listFilesFromConcatenatedStream(
+            stream = stream,
+            totalArchiveSize = concatenated.size.toLong(),
+            volumeSizes = volumeSizes
+        )
+
+        val bigfile = entries.find { it.path == "bigfile.dat" }
+        assertNotNull(bigfile, "Should find bigfile.dat")
+        assertNotNull(bigfile.crc32, "Split entry should have CRC")
+        assertEquals(
+            fullCrc, bigfile.crc32,
+            "Entry CRC should be full file CRC ($fullCrc) from last volume, " +
+                    "not first volume's running CRC ($crc0)"
+        )
+    }
+
+    @Test
+    fun `inferred split file should not have partial CRC from first volume`() = runBlocking {
+        // When the infer optimization is used, the parser only reads vol 0's header.
+        // RAR5 stores running CRCs, so vol 0's CRC is NOT the full file CRC.
+        // The entry should have null CRC rather than a misleading partial CRC.
+        val totalSize = 600
+        val fileData = ByteArray(totalSize) { (it % 251).toByte() }
+
+        val chunk0 = 200
+        val chunk1 = 200
+        val chunk2 = totalSize - chunk0 - chunk1
+
+        val crc0 = CRC32().also { it.update(fileData, 0, chunk0) }.value
+
+        val vol0 = buildVolume(
+            buildMainHeader(isVolume = true),
+            buildFileBlock(
+                "payload.bin", dataSize = chunk0, unpackedSize = totalSize,
+                splitAfter = true, data = fileData.sliceArray(0 until chunk0),
+                crc32 = crc0
+            ),
+            buildEndOfArchive()
+        )
+
+        val vol1 = buildVolume(
+            buildMainHeader(isVolume = true, hasVolumeNumber = true, volumeNumber = 1),
+            buildFileBlock(
+                "payload.bin", dataSize = chunk1, unpackedSize = totalSize,
+                splitBefore = true, splitAfter = true,
+                data = fileData.sliceArray(chunk0 until chunk0 + chunk1)
+            ),
+            buildEndOfArchive()
+        )
+
+        val vol2 = buildVolume(
+            buildMainHeader(isVolume = true, hasVolumeNumber = true, volumeNumber = 2),
+            buildFileBlock(
+                "payload.bin", dataSize = chunk2, unpackedSize = totalSize,
+                splitBefore = true,
+                data = fileData.sliceArray(chunk0 + chunk1 until totalSize)
+            ),
+            buildEndOfArchive()
+        )
+
+        val concatenated = vol0 + vol1 + vol2
+        val stream = ByteArraySeekableInputStream(concatenated)
+        val volumeSizes = listOf(vol0.size.toLong(), vol1.size.toLong(), vol2.size.toLong())
+
+        val entries = service.listFilesFromConcatenatedStream(
+            stream = stream,
+            totalArchiveSize = concatenated.size.toLong(),
+            volumeSizes = volumeSizes
+        )
+
+        assertEquals(1, entries.size)
+        val entry = entries[0]
+        // CRC should be null because infer path can't determine the full file CRC
+        kotlin.test.assertNull(
+            entry.crc32,
+            "Inferred split entry should have null CRC (not first volume's partial CRC $crc0)"
+        )
+    }
 }

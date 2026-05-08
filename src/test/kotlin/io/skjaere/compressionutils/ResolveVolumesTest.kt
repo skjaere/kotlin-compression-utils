@@ -138,15 +138,17 @@ class ResolveVolumesTest {
     }
 
     @Test
-    fun `resolveVolumes drops unresolvable bare-name files with no archive signature`() {
+    fun `resolveVolumes preserves all volumes when none are identified as archives`() {
         val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
 
         // Obfuscated volumes whose first16kb doesn't match any PAR2 hash16k AND
-        // whose first bytes aren't a RAR/7z signature — we have no positive
-        // evidence these are archive volumes, so they're dropped to avoid
-        // corrupting the concatenated stream (was the source of the
-        // "Expected RAR signature... got: FF D8 FF E0" production failure when
-        // .jpg/.nfo side files leaked into the volume list).
+        // whose first bytes aren't a RAR/7z signature. Since NO volume looks
+        // like an archive, the fallback returns the resolved input rather
+        // than an empty list — preserves the raw-passthrough case and avoids
+        // silent data loss for non-archive payloads.
+        //
+        // Note: when at least one volume IS a valid archive, side files like
+        // .jpg/.nfo are still stripped (covered by the mixed-volume tests).
         val volumes = listOf(
             VolumeMetaData("obfuscated_name_2", 1000, ByteArray(16384) { 0x02 }),
             VolumeMetaData("obfuscated_name_1", 1000, ByteArray(16384) { 0x01 })
@@ -154,7 +156,7 @@ class ResolveVolumesTest {
 
         val result = ArchiveService.resolveVolumes(volumes, par2Data)
 
-        assertEquals(0, result.size)
+        assertEquals(2, result.size)
     }
 
     @Test
@@ -174,6 +176,34 @@ class ResolveVolumesTest {
         val result = ArchiveService.resolveVolumes(volumes, par2Data)
 
         assertEquals(2, result.size)
+    }
+
+    @Test
+    fun `resolveVolumes preserves single non-archive volume (raw passthrough)`() {
+        // Reproduces a prod symptom where obfuscated single-file NZBs (par2
+        // sidecars wrapping a single non-archive payload such as a raw .mkv)
+        // had the payload stripped because the bare-name filename doesn't
+        // match an archive extension AND the file's first16kb has no
+        // RAR/7z magic. The strip produced an empty list, which downstream
+        // surfaced as Raw(emptyList()) → empty NzbDocument → cleanup task
+        // deleted it → "no files imported" with no error logged.
+        //
+        // Contract: when no volume is identified as an archive, fall back to
+        // the resolved input rather than returning empty. Lets downstream
+        // classify the NZB as raw passthrough.
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+
+        // EBML/Matroska magic — not an archive signature.
+        val mkvMagic = byteArrayOf(0x1A.toByte(), 0x45.toByte(), 0xDF.toByte(), 0xA3.toByte())
+        val first16kb = mkvMagic + ByteArray(16384 - mkvMagic.size)
+        val volumes = listOf(
+            VolumeMetaData("4f8a3b2c1d", 2_000_000_000L, first16kb)
+        )
+
+        val result = ArchiveService.resolveVolumes(volumes, par2Data)
+
+        assertEquals(1, result.size)
+        assertEquals("4f8a3b2c1d", result[0].filename)
     }
 
     @Test

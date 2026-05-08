@@ -232,6 +232,7 @@ class Rar4Parser {
      *                    for split files: byte positions are inferred from volume sizes instead of
      *                    parsing all volume headers. Only works for uncompressed (store) files.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun parse(
         stream: SeekableInputStream,
         entries: MutableList<RarFileEntry>,
@@ -239,7 +240,12 @@ class Rar4Parser {
         volumeIndex: Int,
         archiveSize: Long?,
         readBytes: suspend (SeekableInputStream, Int) -> ByteArray?,
-        volumeSizes: List<Long>? = null
+        volumeSizes: List<Long>? = null,
+        archiveName: String? = null,
+        // Phase 2 plumbing — RAR4 encryption uses a different scheme (AES-128 +
+        // custom KDF) that's outside the Phase 1-3 scope; the param is accepted
+        // for API symmetry with Rar5Parser but currently ignored.
+        password: String? = null,
     ) {
         stream.seek(7) // Skip signature
         var foundEndArchive = false
@@ -320,16 +326,14 @@ class Rar4Parser {
                     }
                 }
 
-                logger.warn(
-                    "Expected RAR signature or padding after end-of-archive, got: ${
-                        possibleSig.joinToString(" ") {
-                            "%02X".format(
-                                it
-                            )
-                        }
-                    }"
+                val sigHex = possibleSig.joinToString(" ") { "%02X".format(it) }
+                throw MalformedRarArchiveException(
+                    archiveName = archiveName,
+                    volumeIndex = currentVolumeIndex,
+                    unexpectedBytes = possibleSig,
+                    message = "Expected RAR signature or padding after end-of-archive " +
+                            "in '${archiveName ?: "<unknown>"}' (volume $currentVolumeIndex), got: $sigHex",
                 )
-                break
             }
 
             // Read block header (7 bytes minimum)

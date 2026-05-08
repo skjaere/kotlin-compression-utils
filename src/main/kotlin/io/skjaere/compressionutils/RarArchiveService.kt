@@ -32,14 +32,18 @@ class RarArchiveService {
     suspend fun listFilesFromConcatenatedStream(
         stream: SeekableInputStream,
         totalArchiveSize: Long? = null,
-        volumeSizes: List<Long>? = null
+        volumeSizes: List<Long>? = null,
+        archiveName: String? = null,
+        password: String? = null,
     ): List<RarFileEntry> {
         return listFiles(
             stream = stream,
             maxFiles = null,
             volumeIndex = 0,
             archiveSize = totalArchiveSize,
-            volumeSizes = volumeSizes
+            volumeSizes = volumeSizes,
+            archiveName = archiveName,
+            password = password,
         )
     }
 
@@ -57,7 +61,9 @@ class RarArchiveService {
         maxFiles: Int? = null,
         volumeIndex: Int = 0,
         archiveSize: Long? = null,
-        volumeSizes: List<Long>? = null
+        volumeSizes: List<Long>? = null,
+        archiveName: String? = null,
+        password: String? = null,
     ): List<RarFileEntry> {
         val entries = mutableListOf<RarFileEntry>()
 
@@ -74,7 +80,10 @@ class RarArchiveService {
         when {
             isRar5 -> {
                 logger.debug("Detected RAR 5.x archive (volume $volumeIndex)")
-                rar5Parser.parse(stream, entries, maxFiles, volumeIndex, archiveSize, ::readBytes, volumeSizes)
+                rar5Parser.parse(
+                    stream, entries, maxFiles, volumeIndex, archiveSize, ::readBytes,
+                    volumeSizes, archiveName, password,
+                )
             }
 
             isRar4 -> {
@@ -86,7 +95,9 @@ class RarArchiveService {
                     volumeIndex,
                     archiveSize,
                     ::readBytes,
-                    volumeSizes
+                    volumeSizes,
+                    archiveName,
+                    password,
                 )
             }
 

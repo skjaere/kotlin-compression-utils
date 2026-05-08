@@ -72,6 +72,16 @@ object ArchiveValidator {
                 System.exit(1)
                 return@runBlocking // unreachable but needed for type inference
             }
+            is ListFilesResult.Encrypted -> {
+                System.err.println(
+                    "Archive is password-protected (RAR5 HEAD_CRYPT). Cannot list files: " +
+                        "archiveName=${listFilesResult.info.archiveName}, " +
+                        "kdfIter=2^${listFilesResult.info.kdfIterationsLog2}, " +
+                        "pwcheck=${listFilesResult.info.hasPasswordCheck}"
+                )
+                System.exit(2)
+                return@runBlocking
+            }
         }
 
         println("Library found ${entries.size} entries:")

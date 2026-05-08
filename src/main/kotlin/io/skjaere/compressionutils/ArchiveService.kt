@@ -159,9 +159,17 @@ object ArchiveService {
         // Bare-name obfuscated files whose first16kb does not match an archive
         // signature are dropped: we have no positive evidence they're archive
         // volumes, and including them risks the same trailing-bytes problem.
-        return resolved
+        //
+        // Fallback: when NO volume is identified as an archive, return the
+        // resolved input as-is. This handles raw single-file NZBs (e.g., a
+        // bare .mkv with par2 sidecars) where the strip would otherwise leave
+        // an empty list, surfacing as silent data loss downstream. The
+        // .jpg/.nfo concern is unaffected — that scenario has at least one
+        // real archive volume alongside, so the filter still keeps only those.
+        val archiveVolumes = resolved
             .filter { it.isArchiveVolume() }
             .sortedBy { volumeSortKey(it.filename) }
+        return archiveVolumes.ifEmpty { resolved }
     }
 
     private fun VolumeMetaData.isArchiveVolume(): Boolean {

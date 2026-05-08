@@ -8,6 +8,21 @@ import java.security.MessageDigest
 sealed interface ListFilesResult {
     data class Success(val entries: List<ArchiveFileEntry>) : ListFilesResult
     data object UnsupportedFormat : ListFilesResult
+
+    /**
+     * Archive is RAR5 with a `HEAD_CRYPT` block (password-protected). Carries the
+     * crypto parameters needed for a future password-aware re-parse so callers
+     * don't have to re-fetch the first volume's first article to re-derive them.
+     *
+     * @property passwordIncorrect `true` when a password was supplied but the
+     * derived key didn't successfully decrypt the next block (CRC mismatch). The
+     * archive is still encrypted; the caller needs a different password.
+     * `false` (default) when no password was attempted.
+     */
+    data class Encrypted(
+        val info: EncryptionInfo,
+        val passwordIncorrect: Boolean = false,
+    ) : ListFilesResult
 }
 
 /**
@@ -58,7 +73,8 @@ object ArchiveService {
     suspend fun listFiles(
         stream: SeekableInputStream,
         volumes: List<VolumeMetaData>,
-        par2Data: ByteArray? = null
+        par2Data: ByteArray? = null,
+        password: String? = null,
     ): ListFilesResult {
         val resolvedVolumes = resolveVolumes(volumes, par2Data)
 
@@ -68,13 +84,23 @@ object ArchiveService {
         return when (archiveType) {
             ArchiveTypeDetector.ArchiveType.RAR4,
             ArchiveTypeDetector.ArchiveType.RAR5 -> {
-                ListFilesResult.Success(
-                    rarArchiveService.listFilesFromConcatenatedStream(
-                        stream = stream,
-                        totalArchiveSize = resolvedVolumes.sumOf { it.size },
-                        volumeSizes = resolvedVolumes.map { it.size }
+                // Catch the parser-internal encryption sentinel here at the public-API
+                // boundary and convert it to the result-type variant. The exception
+                // never escapes this function in the encryption case.
+                try {
+                    ListFilesResult.Success(
+                        rarArchiveService.listFilesFromConcatenatedStream(
+                            stream = stream,
+                            totalArchiveSize = resolvedVolumes.sumOf { it.size },
+                            volumeSizes = resolvedVolumes.map { it.size },
+                            archiveName = resolvedVolumes.firstOrNull()?.filename,
+                            password = password,
+                        )
                     )
-                )
+                } catch (e: EncryptedRarArchiveException) {
+                    logger.info("Detected encrypted RAR archive: {}", e.message)
+                    ListFilesResult.Encrypted(info = e.info, passwordIncorrect = e.passwordIncorrect)
+                }
             }
 
             ArchiveTypeDetector.ArchiveType.SEVENZIP -> {
@@ -117,7 +143,31 @@ object ArchiveService {
         } else {
             volumes
         }
-        return resolved.sortedBy { volumeSortKey(it.filename) }
+        // Whitelist: keep only files we can positively identify as archive volumes.
+        // A file is an archive volume if EITHER (a) its filename has a known archive
+        // extension (.rar/.r##/.s##/.partN.rar/.7z/.7z.NNN — see KNOWN_EXTENSION_REGEX),
+        // OR (b) its first16kb starts with a RAR4/RAR5/7z magic signature.
+        //
+        // Without this, side files (.jpg/.nfo/.srr/.par2 etc.) sort to Int.MAX_VALUE
+        // in volumeSortKey and get appended after the last RAR volume in the
+        // concatenated stream — the parser reaches end-of-archive correctly but then
+        // sees their leading bytes (e.g. FF D8 FF E0 for a JPG) where it expects
+        // either zero padding or the next volume's Rar! signature, and
+        // MalformedRarArchiveException fires on what is really an upstream sequencing
+        // bug, not a corrupted archive.
+        //
+        // Bare-name obfuscated files whose first16kb does not match an archive
+        // signature are dropped: we have no positive evidence they're archive
+        // volumes, and including them risks the same trailing-bytes problem.
+        return resolved
+            .filter { it.isArchiveVolume() }
+            .sortedBy { volumeSortKey(it.filename) }
+    }
+
+    private fun VolumeMetaData.isArchiveVolume(): Boolean {
+        if (fileHasKnownExtension(filename)) return true
+        val head = first16kb ?: return false
+        return ArchiveTypeDetector.detect(head).type != ArchiveTypeDetector.ArchiveType.UNKNOWN
     }
 
     /**

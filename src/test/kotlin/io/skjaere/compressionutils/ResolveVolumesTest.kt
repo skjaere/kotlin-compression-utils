@@ -138,10 +138,15 @@ class ResolveVolumesTest {
     }
 
     @Test
-    fun `resolveVolumes with PAR2 and unresolvable hashes preserves filenames`() {
+    fun `resolveVolumes drops unresolvable bare-name files with no archive signature`() {
         val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
 
-        // Obfuscated volumes whose first16kb doesn't match any PAR2 hash16k
+        // Obfuscated volumes whose first16kb doesn't match any PAR2 hash16k AND
+        // whose first bytes aren't a RAR/7z signature — we have no positive
+        // evidence these are archive volumes, so they're dropped to avoid
+        // corrupting the concatenated stream (was the source of the
+        // "Expected RAR signature... got: FF D8 FF E0" production failure when
+        // .jpg/.nfo side files leaked into the volume list).
         val volumes = listOf(
             VolumeMetaData("obfuscated_name_2", 1000, ByteArray(16384) { 0x02 }),
             VolumeMetaData("obfuscated_name_1", 1000, ByteArray(16384) { 0x01 })
@@ -149,11 +154,26 @@ class ResolveVolumesTest {
 
         val result = ArchiveService.resolveVolumes(volumes, par2Data)
 
-        // Resolution attempted but hashes don't match → filenames unchanged,
-        // both sort as Int.MAX_VALUE (stable order preserved)
+        assertEquals(0, result.size)
+    }
+
+    @Test
+    fun `resolveVolumes keeps unresolvable bare-name files when first16kb is a RAR signature`() {
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+
+        // Bare-name files whose name PAR2 can't recover, but whose bytes
+        // start with a RAR4 signature (0x52 0x61 0x72 0x21 0x1A 0x07 0x00).
+        // These are kept — the byte signature is positive evidence they're
+        // archive volumes.
+        val rar4Header = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00)
+        val volumes = listOf(
+            VolumeMetaData("obfuscated_a", 1000, rar4Header + ByteArray(16384 - rar4Header.size)),
+            VolumeMetaData("obfuscated_b", 1000, rar4Header + ByteArray(16384 - rar4Header.size))
+        )
+
+        val result = ArchiveService.resolveVolumes(volumes, par2Data)
+
         assertEquals(2, result.size)
-        assertEquals("obfuscated_name_2", result[0].filename)
-        assertEquals("obfuscated_name_1", result[1].filename)
     }
 
     @Test

@@ -12,10 +12,26 @@ class Rar5Parser {
         private const val RAR5_HEAD_MAIN = 1
         private const val RAR5_HEAD_FILE = 2
         private const val RAR5_HEAD_SERVICE = 3
+        private const val RAR5_HEAD_CRYPT = 4
         private const val RAR5_HEAD_ENDARC = 5
+
+        // RAR 5.x HEAD_CRYPT body field offsets (within the block's body, after the
+        // block header). See rar5tech.txt §4 (encryption block).
+        private const val RAR5_CRYPT_SALT_SIZE = 16
+        private const val RAR5_CRYPT_PWCHECK_SIZE = 8
+
+        // Volume-boundary tolerance: when scanning for the next volume's RAR signature
+        // after end-of-archive, if we're within this many bytes of the stream end and
+        // the bytes don't match a signature/padding, treat as clean EOF rather than
+        // throwing MalformedRarArchive. Encrypted RAR5 volumes commonly have a trailing
+        // tail of encryption padding that decrypts to non-zero bytes.
+        private const val END_OF_STREAM_TOLERANCE = 256
 
         // RAR 5.x file flags (inside file header body)
         private const val RAR5_FILE_FLAG_ISDIR = 0x01
+
+        // File header extra-area record types (rar5tech.txt §4.3)
+        private const val FILE_EXTRA_TYPE_ENCRYPTION = 0x01
 
         // RAR 5.x block header flags (split indicators are in the block-level header, not file flags)
         private const val RAR5_BLOCK_FLAG_SPLIT_BEFORE = 0x08  // Data continues from previous volume
@@ -29,7 +45,14 @@ class Rar5Parser {
         volumeIndex: Int,
         archiveSize: Long?,
         readBytes: suspend (SeekableInputStream, Int) -> ByteArray?,
-        volumeSizes: List<Long>? = null
+        volumeSizes: List<Long>? = null,
+        archiveName: String? = null,
+        // Optional password. When supplied AND the archive contains a `HEAD_CRYPT`
+        // block, we derive the AES key via PBKDF2 and validate by decrypting the
+        // next block's CRC. Wrong passwords still throw `EncryptedRarArchiveException`
+        // (caught by the public boundary and converted to
+        // [ListFilesResult.Encrypted] with `passwordIncorrect=true`).
+        password: String? = null,
     ) {
         stream.seek(8) // Skip signature
         var foundEndArchive = false
@@ -116,16 +139,31 @@ class Rar5Parser {
                     }
                 }
 
-                logger.warn(
-                    "Expected RAR signature or padding after end-of-archive, got: ${
-                        possibleSig.joinToString(" ") {
-                            "%02X".format(
-                                it
-                            )
-                        }
-                    }"
+                // Bytes after end-of-archive aren't padding, aren't a continuation
+                // signature. Two cases:
+                //   1. Trailing bytes near EOF — common in encrypted RAR5 volumes
+                //      where the last block is padded out to volume boundary with
+                //      what decrypts to non-zero garbage. Treat as clean end of
+                //      stream; we've parsed everything we could.
+                //   2. Real corruption mid-stream — bytes appear well before EOF.
+                //      That's a genuine malformed archive; throw.
+                val streamSize = stream.size()
+                if (streamSize >= 0 && stream.position() + END_OF_STREAM_TOLERANCE >= streamSize) {
+                    logger.debug(
+                        "Bytes after end-of-archive at position {} are within {} of EOF " +
+                            "(stream size {}); treating as clean end of stream",
+                        headerStartPosition, END_OF_STREAM_TOLERANCE, streamSize,
+                    )
+                    break
+                }
+                val sigHex = possibleSig.joinToString(" ") { "%02X".format(it) }
+                throw MalformedRarArchiveException(
+                    archiveName = archiveName,
+                    volumeIndex = currentVolumeIndex,
+                    unexpectedBytes = possibleSig,
+                    message = "Expected RAR signature or padding after end-of-archive " +
+                            "in '${archiveName ?: "<unknown>"}' (volume $currentVolumeIndex), got: $sigHex",
                 )
-                break
 
                 // Continue to read rest of header
             } else {
@@ -171,8 +209,14 @@ class Rar5Parser {
             val remainingHeaderSize = headerSize - headerBytesConsumed
 
             if (remainingHeaderSize < 0) {
-                logger.warn("Invalid header size: $headerSize, consumed: $headerBytesConsumed, remaining: $remainingHeaderSize")
-                break
+                throw MalformedRarArchiveException(
+                    archiveName = archiveName,
+                    volumeIndex = currentVolumeIndex,
+                    unexpectedBytes = ByteArray(0),
+                    message = "Invalid RAR5 header size in '${archiveName ?: "<unknown>"}' " +
+                            "(volume $currentVolumeIndex): headerSize=$headerSize, " +
+                            "consumed=$headerBytesConsumed, remaining=$remainingHeaderSize",
+                )
             }
 
             val headerDataPosition = stream.position()
@@ -307,6 +351,61 @@ class Rar5Parser {
 
                 RAR5_HEAD_SERVICE -> {
                     logger.debug("Found service header at position $headerStartPosition")
+                }
+
+                RAR5_HEAD_CRYPT -> {
+                    // Archive is password-protected. Subsequent block headers are
+                    // AES-CBC encrypted with a key derived from (password, salt,
+                    // 2^kdfIterations). If a password was supplied, derive the key
+                    // and switch into the encrypted-block reading path; this loop
+                    // continues with `stream` advanced to whatever the encrypted
+                    // path leaves it (start of next non-encrypted region or EOF).
+                    val cryptException = parseCryptHeaderAndThrow(
+                        stream = stream,
+                        archiveName = archiveName,
+                        currentVolumeIndex = currentVolumeIndex,
+                        headerStartPosition = headerStartPosition,
+                        remainingHeaderSize = remainingHeaderSize,
+                    )
+                    if (password == null || cryptException.info.salt == null ||
+                        cryptException.info.kdfIterationsLog2 == null
+                    ) {
+                        throw cryptException
+                    }
+                    val nextHeaderPosition = headerDataPosition + remainingHeaderSize + dataAreaSize
+                    stream.seek(nextHeaderPosition)
+                    val key = Rar5Crypto.deriveKey(
+                        password = password,
+                        salt = cryptException.info.salt,
+                        kdfIterationsLog2 = cryptException.info.kdfIterationsLog2,
+                    )
+                    val outcome = parseEncryptedBlocks(
+                        stream = stream,
+                        key = key,
+                        salt = cryptException.info.salt,
+                        kdfIterationsLog2 = cryptException.info.kdfIterationsLog2,
+                        entries = entries,
+                        seenFiles = seenFiles,
+                        fileSplitInfo = fileSplitInfo,
+                        currentVolumeIndex = currentVolumeIndex,
+                    )
+                    if (outcome == EncryptedParseOutcome.PASSWORD_INCORRECT) {
+                        throw EncryptedRarArchiveException(
+                            info = cryptException.info,
+                            passwordIncorrect = true,
+                            message = cryptException.message + " — supplied password is incorrect",
+                        )
+                    }
+                    if (outcome == EncryptedParseOutcome.END_OF_ARCHIVE) {
+                        foundEndArchive = true
+                    }
+                    // parseEncryptedBlocks has already advanced the stream past all the
+                    // encrypted blocks (well past where this CRYPT iteration's
+                    // nextHeaderPosition would land). `continue` the outer loop to skip
+                    // the bottom-of-loop `stream.seek(nextHeaderPosition)` that would
+                    // otherwise yank us backwards to the end of the unencrypted CRYPT
+                    // block, undoing our forward progress.
+                    continue
                 }
 
                 else -> {
@@ -567,6 +666,307 @@ class Rar5Parser {
             }
         }
 
+        return null
+    }
+
+    /**
+     * Parses the body of a `HEAD_CRYPT` block (RAR5 type 4) and constructs the
+     * exception that carries the extracted crypto parameters. Body layout per
+     * rar5tech.txt §4 (encryption block):
+     *   vint encryption_version  (0 = AES-256)
+     *   vint encryption_flags    (bit 0x01 = password check value present)
+     *   1 byte kdf_count         (PBKDF2 iterations = 2^kdf_count)
+     *   16 bytes salt
+     *   if (flags & 0x01): 12 bytes password-check (8 bytes pswcheck + 4 bytes CRC)
+     *
+     * If any field can't be read the params are surfaced as null — the exception
+     * still fires so the caller knows the archive is encrypted, just without the
+     * crypto details. Phase 1 doesn't actually use the params; Phase 3 will.
+     */
+    private suspend fun parseCryptHeaderAndThrow(
+        stream: SeekableInputStream,
+        archiveName: String?,
+        currentVolumeIndex: Int,
+        headerStartPosition: Long,
+        remainingHeaderSize: Long,
+    ): EncryptedRarArchiveException {
+        val bodyStart = stream.position()
+        val bodyEnd = bodyStart + remainingHeaderSize
+
+        val encryptionVersion = readVInt(stream)?.first
+        val encryptionFlags = readVInt(stream)?.first ?: 0L
+        val hasPasswordCheck = (encryptionFlags and 0x01L) != 0L
+
+        val kdfCount: Int? = if (stream.position() < bodyEnd) {
+            val buf = ByteArray(1)
+            if (stream.read(buf, 0, 1) == 1) buf[0].toInt() and 0xFF else null
+        } else {
+            null
+        }
+
+        val salt: ByteArray? = if (kdfCount != null && stream.position() + RAR5_CRYPT_SALT_SIZE <= bodyEnd) {
+            val s = ByteArray(RAR5_CRYPT_SALT_SIZE)
+            if (stream.read(s, 0, RAR5_CRYPT_SALT_SIZE) == RAR5_CRYPT_SALT_SIZE) s else null
+        } else {
+            null
+        }
+
+        val saltHex = salt?.joinToString("") { "%02x".format(it) }
+        val info = EncryptionInfo(
+            archiveName = archiveName,
+            volumeIndex = currentVolumeIndex,
+            encryptionVersion = encryptionVersion,
+            kdfIterationsLog2 = kdfCount,
+            salt = salt,
+            hasPasswordCheck = hasPasswordCheck,
+        )
+        return EncryptedRarArchiveException(
+            info = info,
+            message = buildString {
+                append("RAR5 archive '${archiveName ?: "<unknown>"}' (volume $currentVolumeIndex) is ")
+                append("password-protected (HEAD_CRYPT block at offset $headerStartPosition)")
+                if (kdfCount != null) append("; kdfIter=2^$kdfCount")
+                if (saltHex != null) append("; salt=$saltHex")
+                if (hasPasswordCheck) append("; pwcheck=present")
+            },
+        )
+    }
+
+    private enum class EncryptedParseOutcome {
+        END_OF_ARCHIVE,    // hit HEAD_ENDARC — outer loop should set foundEndArchive
+        STREAM_END,        // ran out of bytes without ENDARC — outer loop will see EOF
+        PASSWORD_INCORRECT // first block CRC mismatch — outer caller throws Encrypted(pwIncorrect=true)
+    }
+
+    /**
+     * Reads encrypted blocks one-by-one after a `HEAD_CRYPT`, decrypts each via
+     * [Rar5EncryptedBlockReader], CRC-validates, and parses HEAD_FILE entries
+     * from the plaintext. The first block also serves as password validation:
+     * if its CRC doesn't match, the password was wrong and we abort.
+     *
+     * Subsequent blocks beyond the first don't re-validate — RAR5 encrypted
+     * archives with a wrong key would diverge wildly across blocks but our
+     * concern is the wrong-password case which the first-block check catches.
+     *
+     * Limitations of this implementation (Phase 3 scope):
+     * - Multi-volume continuation across encrypted volumes works through the
+     *   outer loop's existing `foundEndArchive` → next-volume signature scan
+     *   logic — when a new volume's HEAD_CRYPT block is hit, this function is
+     *   re-entered.
+     * - Split-file position inference (the `inferSplitPositions` optimization
+     *   path) is intentionally skipped in encrypted mode; we always use the
+     *   normal multi-volume parse path. That's slower for huge single-file
+     *   season packs but vastly simpler and correctness-first.
+     */
+    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ReturnCount")
+    private suspend fun parseEncryptedBlocks(
+        stream: SeekableInputStream,
+        key: ByteArray,
+        salt: ByteArray,
+        kdfIterationsLog2: Int,
+        entries: MutableList<RarFileEntry>,
+        seenFiles: MutableSet<String>,
+        fileSplitInfo: MutableMap<String, MutableList<SplitInfo>>,
+        currentVolumeIndex: Int,
+    ): EncryptedParseOutcome {
+        val reader = Rar5EncryptedBlockReader(key)
+        var firstBlock = true
+        while (true) {
+            val blockStartOnDisk = stream.position()
+            val block = reader.readBlockHeader(stream) ?: return EncryptedParseOutcome.STREAM_END
+            val pt = block.plaintextHeader
+
+            // CRC-validate the first block (catches wrong password). If it fails,
+            // we don't know whether subsequent block bytes are also from a wrong
+            // key or from corruption, but either way we're done.
+            if (firstBlock) {
+                val storedCrc = ByteBuffer.wrap(pt, 0, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                    .toLong() and 0xFFFFFFFFL
+                val crc32 = java.util.zip.CRC32()
+                crc32.update(pt, 4, pt.size - 4)
+                if (storedCrc != crc32.value) return EncryptedParseOutcome.PASSWORD_INCORRECT
+                firstBlock = false
+            }
+
+            // Re-parse the block from plaintext using the same vint helpers the
+            // unencrypted path uses, just over a ByteArraySeekableInputStream.
+            val ptStream = ByteArraySeekableInputStream(pt)
+            ptStream.seek(4) // skip CRC
+
+            val headerSizeResult = readVInt(ptStream) ?: return EncryptedParseOutcome.STREAM_END
+            val headerSize = headerSizeResult.first
+
+            val headerTypeResult = readVInt(ptStream) ?: return EncryptedParseOutcome.STREAM_END
+            val headerType = headerTypeResult.first.toInt()
+
+            val headerFlagsResult = readVInt(ptStream) ?: return EncryptedParseOutcome.STREAM_END
+            val headerFlags = headerFlagsResult.first
+            var headerBytesConsumed = headerTypeResult.second + headerFlagsResult.second
+
+            var extraAreaSize = 0L
+            if (headerFlags and 0x01L != 0L) {
+                val r = readVInt(ptStream) ?: return EncryptedParseOutcome.STREAM_END
+                extraAreaSize = r.first
+                headerBytesConsumed += r.second
+            }
+            var dataAreaSize = 0L
+            if (headerFlags and 0x02L != 0L) {
+                val r = readVInt(ptStream) ?: return EncryptedParseOutcome.STREAM_END
+                dataAreaSize = r.first
+                headerBytesConsumed += r.second
+            }
+
+            val remainingHeaderSize = headerSize - headerBytesConsumed
+            if (remainingHeaderSize < 0) return EncryptedParseOutcome.STREAM_END
+
+            val headerDataPosition = ptStream.position()
+
+            when (headerType) {
+                RAR5_HEAD_FILE -> {
+                    val fileEntry = parseFileHeader(
+                        ptStream, headerDataPosition, headerFlags,
+                        remainingHeaderSize, currentVolumeIndex, dataAreaSize,
+                        ::readBytesFromInMemoryStream,
+                    )
+                    if (fileEntry != null) {
+                        // dataStartPosition for encrypted blocks points at the IV (which is at
+                        // blockStartOnDisk). plaintextHeaderSize tells the streaming layer how
+                        // many bytes of decrypted block precede the actual file data.
+                        val plaintextHeaderSize = 4L + headerSizeResult.second + headerSize
+                        // The extra area sits at the END of the header, just before the data area.
+                        // It can carry a per-file encryption record (type 1) with the data area's
+                        // own AES-CBC IV. Without that IV we'd decrypt the data area chained from
+                        // the header's last ciphertext block, which produces garbage.
+                        val fileEncryptionIv = if (extraAreaSize > 0) {
+                            val extraStart = (plaintextHeaderSize - extraAreaSize).toInt()
+                            parseFileEncryptionIv(pt, extraStart, extraAreaSize.toInt())
+                        } else null
+                        val splitInfo = SplitInfo(
+                            volumeIndex = currentVolumeIndex,
+                            dataStartPosition = blockStartOnDisk,
+                            dataSize = dataAreaSize,
+                            encryption = SplitEncryptionInfo(
+                                plaintextHeaderSize = plaintextHeaderSize,
+                                salt = salt,
+                                kdfIterationsLog2 = kdfIterationsLog2,
+                                dataAreaIv = fileEncryptionIv,
+                            ),
+                        )
+                        fileSplitInfo.getOrPut(fileEntry.path) { mutableListOf() }.add(splitInfo)
+                        if (seenFiles.add(fileEntry.path)) {
+                            entries.add(fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList()))
+                            logger.debug("Found encrypted file: {} in volume {}", fileEntry.path, currentVolumeIndex)
+                        } else {
+                            val idx = entries.indexOfFirst { it.path == fileEntry.path }
+                            if (idx >= 0) {
+                                entries[idx] = entries[idx].copy(
+                                    splitParts = fileSplitInfo[fileEntry.path]!!.toList(),
+                                    crc32 = fileEntry.crc32 ?: entries[idx].crc32,
+                                )
+                            }
+                        }
+                    }
+                }
+                RAR5_HEAD_SERVICE, RAR5_HEAD_MAIN -> {
+                    logger.debug("Encrypted block type {} at volume {}", headerType, currentVolumeIndex)
+                }
+                RAR5_HEAD_ENDARC -> {
+                    logger.debug("Encrypted end-of-archive marker (volume {})", currentVolumeIndex)
+                }
+                else -> {
+                    logger.debug("Unknown encrypted block type {} at volume {}", headerType, currentVolumeIndex)
+                }
+            }
+
+            // Advance past this block's full ciphertext: header + data area, padded to 16.
+            // Using a unified formula across all block types so we can't get the seek
+            // wrong per-branch.
+            val totalPlaintextSize = 4L + headerSizeResult.second + headerSize + dataAreaSize
+            stream.seek(
+                blockStartOnDisk + Rar5EncryptedBlockReader.IV_SIZE +
+                    Rar5Crypto.ciphertextLengthFor(totalPlaintextSize)
+            )
+
+            if (headerType == RAR5_HEAD_ENDARC) return EncryptedParseOutcome.END_OF_ARCHIVE
+        }
+    }
+
+    /**
+     * Adapter that lets [parseFileHeader] use the in-memory plaintext stream
+     * with the same `readBytes` lambda shape it expects from disk-backed reads.
+     */
+    private suspend fun readBytesFromInMemoryStream(stream: SeekableInputStream, count: Int): ByteArray? {
+        val buffer = ByteArray(count)
+        var offset = 0
+        while (offset < count) {
+            val read = stream.read(buffer, offset, count - offset)
+            if (read == -1) return null
+            offset += read
+        }
+        return buffer
+    }
+
+    /**
+     * Walks the file header's extra-area records looking for type 1 (file encryption)
+     * and returns its 16-byte AES IV. The data area's AES-CBC stream is independent of
+     * the header's CBC stream and uses this IV as its starting state.
+     *
+     * Per rar5tech.txt §4.3.4, a file-encryption record is laid out:
+     * ```
+     *   Encryption version  vint (1 byte for AES-256)
+     *   Encryption flags    vint (bit 0: PSWCHECK_PRESENT, bit 1: HAS_MAC)
+     *   KDF count           1 byte
+     *   Salt                16 bytes
+     *   IV                  16 bytes
+     *   [Password check    12 bytes if PSWCHECK_PRESENT]
+     *   [Hash type/data    if HAS_MAC]
+     * ```
+     *
+     * Returns null when the extra area has no encryption record (legacy RAR5 archives
+     * where header-encryption was used without per-file data encryption — uncommon).
+     */
+    private fun parseFileEncryptionIv(plaintextBlock: ByteArray, extraAreaStart: Int, extraAreaSize: Int): ByteArray? {
+        var pos = extraAreaStart
+        val end = extraAreaStart + extraAreaSize
+        while (pos < end) {
+            val recordSizeVint = readVIntFromArray(plaintextBlock, pos) ?: return null
+            val recordSize = recordSizeVint.first.toInt()
+            pos += recordSizeVint.second
+            val recordEnd = pos + recordSize
+            if (recordEnd > end) return null
+
+            val recordTypeVint = readVIntFromArray(plaintextBlock, pos) ?: return null
+            val recordType = recordTypeVint.first.toInt()
+            val recordTypeLen = recordTypeVint.second
+            val bodyStart = pos + recordTypeLen
+
+            if (recordType == FILE_EXTRA_TYPE_ENCRYPTION) {
+                // version (vint) + flags (vint) + kdfCount (1 byte) + salt (16) + iv (16)
+                val versionVint = readVIntFromArray(plaintextBlock, bodyStart) ?: return null
+                val flagsVint = readVIntFromArray(
+                    plaintextBlock, bodyStart + versionVint.second,
+                ) ?: return null
+                val kdfStart = bodyStart + versionVint.second + flagsVint.second
+                val ivStart = kdfStart + 1 + 16  // skip kdfCount + salt
+                if (ivStart + 16 > recordEnd) return null
+                return plaintextBlock.copyOfRange(ivStart, ivStart + 16)
+            }
+            pos = recordEnd
+        }
+        return null
+    }
+
+    private fun readVIntFromArray(bytes: ByteArray, offset: Int): Pair<Long, Int>? {
+        var value = 0L
+        var bytesRead = 0
+        var pos = offset
+        while (bytesRead < 10 && pos < bytes.size) {
+            val b = bytes[pos].toInt() and 0xFF
+            value = value or ((b and 0x7F).toLong() shl (bytesRead * 7))
+            bytesRead++
+            pos++
+            if (b and 0x80 == 0) return value to bytesRead
+        }
         return null
     }
 

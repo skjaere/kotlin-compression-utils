@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.2...v0.4.0) (2026-05-09)
+
+
+### Features
+
+* **rar5:** support encrypted (HEAD_CRYPT) RAR5 archives + tighten obfuscated-volume validation
+
+
+### Bug Fixes
+
+* use last-volume CRC for split files, null for inferred
+
 ## [0.3.2](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.1...v0.3.2) (2026-03-04)
 
 

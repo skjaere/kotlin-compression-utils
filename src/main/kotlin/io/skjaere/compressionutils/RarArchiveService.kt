@@ -67,9 +67,19 @@ class RarArchiveService {
     ): List<RarFileEntry> {
         val entries = mutableListOf<RarFileEntry>()
 
-        // Read and verify signature
+        // Read and verify signature. A single `stream.read(buf, 0, 8)` is allowed by
+        // the InputStream contract to return fewer bytes than requested — and on
+        // chunked/segmented streams (e.g. NNTP-backed seekable inputs) it routinely
+        // does, producing a spurious "too short" failure even when the bytes are
+        // available. Loop until we have 8 or hit EOF; only then declare the archive
+        // truncated. RAR4's signature is 7 bytes, so we accept exactly-7 too.
         val signature = ByteArray(8)
-        val sigBytesRead = stream.read(signature, 0, 8)
+        var sigBytesRead = 0
+        while (sigBytesRead < signature.size) {
+            val n = stream.read(signature, sigBytesRead, signature.size - sigBytesRead)
+            if (n == -1) break
+            sigBytesRead += n
+        }
         if (sigBytesRead < 7) {
             throw IOException("Invalid RAR archive: too short")
         }

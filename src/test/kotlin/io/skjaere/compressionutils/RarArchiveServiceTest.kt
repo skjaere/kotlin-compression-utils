@@ -138,4 +138,64 @@ class RarArchiveServiceTest {
         assertTrue(fileEntry != null, "Should find largefile.txt")
         assertTrue(fileEntry.uncompressedSize > 0)
     }
+
+    /**
+     * Regression: production observed `IOException: Invalid RAR archive: too short`
+     * when listing a real multi-volume RAR5 archive served via [io.skjaere.nzbstreamer]'s
+     * NNTP-backed `SeekableInputStream`. The on-wire stream returns partial reads — a
+     * `stream.read(buf, 0, 8)` for the 8-byte RAR signature comes back with fewer than
+     * 8 bytes the first time around even though plenty more data is available.
+     *
+     * `InputStream.read(b, off, len)` is *explicitly* allowed to return short by the
+     * platform contract — the parser must loop, the same way [readBytes] already does
+     * for every other header read. Without the loop, any chunked/buffered upstream
+     * (NNTP segments, ChannelInput, networked reads) will false-alarm with the
+     * "too short" message even though the bytes are there.
+     *
+     * The local file-based tests don't catch this because [FileSeekableInputStream]
+     * wraps `RandomAccessFile.read` which always satisfies the full request — so the
+     * partial-read failure mode only ever shows up in production.
+     */
+    @Test
+    fun `listFiles tolerates partial-read SeekableInputStream when reading the signature`() = runBlocking {
+        // Smallest possible "valid" RAR5 archive: just the 8-byte signature followed
+        // by some trailing bytes the parser can keep chewing on. We only need the
+        // signature read to succeed — what happens after is the parser's existing
+        // problem (it'll throw a different exception or stop). The point is to assert
+        // we no longer get "too short" purely from a partial signature read.
+        val rar5Signature = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00)
+        val payload = rar5Signature + ByteArray(64)  // pad with zeros so any follow-up reads have bytes
+        val trickling = OneByteAtATimeSeekableInputStream(ByteArraySeekableInputStream(payload))
+
+        // Either we successfully parse something (Success with possibly empty entries)
+        // or the parser throws a *parsing* error further in — but NOT "Invalid RAR
+        // archive: too short" from the signature read.
+        val caught = runCatching {
+            service.listFiles(stream = trickling)
+        }.exceptionOrNull()
+
+        assertFalse(
+            caught is IOException && caught.message == "Invalid RAR archive: too short",
+            "Signature read must loop on partial reads, got: $caught",
+        )
+    }
+
+    /**
+     * SeekableInputStream that wraps another stream but artificially limits every
+     * `read(buffer, offset, length)` call to return at most 1 byte. Models the worst
+     * case of chunked I/O — any code that doesn't loop will misbehave.
+     */
+    private class OneByteAtATimeSeekableInputStream(
+        private val delegate: SeekableInputStream,
+    ) : SeekableInputStream {
+        override suspend fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (length <= 0) return 0
+            return delegate.read(buffer, offset, 1)
+        }
+        override suspend fun read(): Int = delegate.read()
+        override suspend fun seek(position: Long) = delegate.seek(position)
+        override fun position(): Long = delegate.position()
+        override fun size(): Long = delegate.size()
+        override fun close() = delegate.close()
+    }
 }

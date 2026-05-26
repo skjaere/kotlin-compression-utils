@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/skjaere/kotlin-compression-utils/compare/v0.4.0...v0.4.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **rar4:** respect LHD_LONG_BLOCK ADD_SIZE in non-file blocks + fallback for short inference ([43f12d6](https://github.com/skjaere/kotlin-compression-utils/commit/43f12d665379fa57f101184dfd50371353ac2a77))
+* **rar:** loop signature read to tolerate partial-read SeekableInputStreams ([a0a42f9](https://github.com/skjaere/kotlin-compression-utils/commit/a0a42f9765b6c262b5f507b435c336242f6cf9d3))
+
 ## [0.4.0](https://github.com/skjaere/kotlin-compression-utils/compare/v0.3.2...v0.4.0) (2026-05-09)
 
 

@@ -1,5 +1,7 @@
 package io.skjaere.compressionutils
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -13,6 +15,12 @@ class Rar4Parser {
         private const val RAR4_FILE_FLAG_SPLIT_AFTER = 0x02   // File continues in next volume
         private const val RAR4_FILE_FLAG_LARGE_FILE =
             0x0100  // 64-bit file sizes (adds HIGH_PACK_SIZE and HIGH_UNPACK_SIZE fields)
+
+        // Generic block flag — set when a 4-byte ADD_SIZE field follows the 7-byte
+        // base header, giving the size of the trailing payload (e.g. file data for
+        // 0x74 file headers, recovery data for 0x7A sub-blocks). HEAD_SIZE on its
+        // own only covers base + header data, *not* the ADD_SIZE payload.
+        private const val RAR4_BLOCK_FLAG_LONG_BLOCK = 0x8000
 
         // Fixed sizes for RAR4 structure
         private const val END_OF_ARCHIVE_SIZE = 7L
@@ -37,6 +45,7 @@ class Rar4Parser {
             stream.seek(RAR4_SIGNATURE_SIZE.toLong())
 
             while (true) {
+                currentCoroutineContext().ensureActive()
                 if (maxFiles != null && results.size >= maxFiles) break
 
                 val blockStartPosition = stream.position()
@@ -256,6 +265,15 @@ class Rar4Parser {
         var inferredSplitParts: List<SplitInfo>? = null // Stores inferred split parts so we can seek past them
 
         while (true) {
+            // Cooperative cancellation checkpoint. The seek/read calls on the
+            // underlying SeekableInputStream are `suspend` functions but they can
+            // complete synchronously when the stream is purely in-memory or backed
+            // by a hot cache — in that case the parser's loop never suspends and
+            // an outer withTimeout/cancel can't interrupt it. ensureActive() makes
+            // every iteration a real cancellation point so import-timeout cancellation
+            // propagates regardless of the underlying I/O backend.
+            currentCoroutineContext().ensureActive()
+
             // Stop if we've reached the max file limit
             if (maxFiles != null && entries.size >= maxFiles) {
                 logger.debug("Reached max files limit: $maxFiles")
@@ -383,13 +401,41 @@ class Rar4Parser {
                                 volumeSizes = volumeSizes,
                                 fileHeaderBlockSize = blockSize
                             )
-                            val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
-                            entries.add(entryWithSplits)
-                            logger.debug("Found split file: ${fileEntry.path}, inferred ${inferredParts.size} parts from volume sizes")
-
-                            // Mark that we should seek past inferred volumes instead of parsing them one by one
-                            skipRemainingVolumes = true
-                            inferredSplitParts = inferredParts
+                            // Verify the inferred parts actually account for the whole file. If they
+                            // don't (e.g. the archive has a recovery-record sub-block between file
+                            // data and EOA — common in older RAR4 multi-volume sets like the QRUS
+                            // releases on a.b.teevee — or any other per-volume overhead the
+                            // [inferSplitPositions] math doesn't model), the seek-past-volumes
+                            // optimisation will land mid-data and the next read in the main loop
+                            // parses garbage as a block header. With a typical garbage value of
+                            // blockSize=0, the "skip block" branch seeks backward by 7 and we
+                            // loop forever. Falling back to per-volume parsing here is slower
+                            // but correct: real EOA markers / signatures drive the seeks instead
+                            // of a guessed end-of-data position.
+                            val inferredSize = inferredParts.sumOf { it.dataSize }
+                            if (inferredSize == fileEntry.uncompressedSize) {
+                                val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
+                                entries.add(entryWithSplits)
+                                logger.debug(
+                                    "Found split file: {}, inferred {} parts from volume sizes",
+                                    fileEntry.path, inferredParts.size,
+                                )
+                                skipRemainingVolumes = true
+                                inferredSplitParts = inferredParts
+                            } else {
+                                val shortfall = fileEntry.uncompressedSize - inferredSize
+                                logger.info(
+                                    "Inference for {} produced {} bytes across {} parts but file " +
+                                            "is {} bytes (short by {} bytes — likely a recovery " +
+                                            "record or other per-volume sub-block). Falling back to " +
+                                            "per-volume parsing.",
+                                    fileEntry.path, inferredSize, inferredParts.size,
+                                    fileEntry.uncompressedSize, shortfall,
+                                )
+                                val entryWithSplits =
+                                    fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
+                                entries.add(entryWithSplits)
+                            }
                         } else {
                             // For the first occurrence, add with current split info
                             val entryWithSplits = fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
@@ -432,9 +478,32 @@ class Rar4Parser {
                 // Seek past this block first
                 stream.seek(headerDataPosition + (blockSize - 7))
             } else {
-                // Skip other block types
-                logger.debug("Found block type 0x${blockType.toString(16)} at position $blockStartPosition")
-                stream.seek(headerDataPosition + (blockSize - 7))
+                // Skip other block types — most commonly the recovery-record sub-block
+                // (HEAD_TYPE=0x7A) in protected multi-volume archives. When the
+                // LHD_LONG_BLOCK flag (0x8000) is set, a 4-byte ADD_SIZE field follows
+                // the 7-byte base header and gives the size of the trailing payload
+                // (the recovery data itself). HEAD_SIZE only covers base+header — without
+                // including ADD_SIZE in the seek, the parser walks off the block grid
+                // into the recovery payload, reads its first bytes as a fresh block
+                // header, and the resulting garbage blockSize (typically 0) sends the
+                // "skip this block" seek backwards, creating an infinite read-7-bytes
+                // / seek-back loop. The file-header branch above doesn't need this
+                // because parseFileHeader already consumed PACK_SIZE (the same ADD_SIZE
+                // value) and the seek there adds fileEntry.compressedSize.
+                val addSize = if ((blockFlags and RAR4_BLOCK_FLAG_LONG_BLOCK) != 0) {
+                    val addSizeBytes = readBytes(stream, 4) ?: break
+                    (addSizeBytes[0].toInt() and 0xFF).toLong() or
+                        ((addSizeBytes[1].toInt() and 0xFF).toLong() shl 8) or
+                        ((addSizeBytes[2].toInt() and 0xFF).toLong() shl 16) or
+                        ((addSizeBytes[3].toInt() and 0xFF).toLong() shl 24)
+                } else {
+                    0L
+                }
+                logger.debug(
+                    "Found block type 0x{} at position {} (size={}, addSize={})",
+                    blockType.toString(16), blockStartPosition, blockSize, addSize,
+                )
+                stream.seek(headerDataPosition + (blockSize - 7) + addSize)
             }
         }
     }

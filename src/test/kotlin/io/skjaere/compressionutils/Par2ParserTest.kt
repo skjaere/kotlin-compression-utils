@@ -2,6 +2,8 @@ package io.skjaere.compressionutils
 
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.io.InputStream
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -94,5 +96,60 @@ class Par2ParserTest {
     fun `parse returns empty result for empty stream`() {
         val result = Par2Parser.parse(ByteArray(0))
         assertTrue(result.files.isEmpty())
+    }
+
+    @Test
+    fun `parse reads whole packets from a stream that returns one byte per read`() {
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+
+        val result = Par2Parser.parse(OneBytePerReadInputStream(par2Data))
+
+        assertEquals(listOf("testfile.part2.rar", "testfile.part1.rar"), result.files.map { it.filename })
+        assertEquals(listOf(44L, 88L), result.files.map { it.fileSize })
+        assertContentEquals(Par2Parser.parse(par2Data).recoverySetId, result.recoverySetId)
+    }
+
+    @Test
+    fun `parse keeps the packets before a header truncated mid-way`() {
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+        val truncated = par2Data.copyOf(SECOND_FILE_DESC_OFFSET + 30)
+
+        listOf(truncated.inputStream(), OneBytePerReadInputStream(truncated)).forEach { input ->
+            assertEquals(listOf("testfile.part2.rar"), Par2Parser.parse(input).files.map { it.filename })
+        }
+    }
+
+    @Test
+    fun `parse keeps the packets before a body truncated mid-way`() {
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+        val truncated = par2Data.copyOf(SECOND_FILE_DESC_OFFSET + 64 + 20)
+
+        listOf(truncated.inputStream(), OneBytePerReadInputStream(truncated)).forEach { input ->
+            assertEquals(listOf("testfile.part2.rar"), Par2Parser.parse(input).files.map { it.filename })
+        }
+    }
+
+    @Test
+    fun `parse keeps the packets before a stream that ends right after a packet's first byte`() {
+        val par2Data = javaClass.getResourceAsStream("/test.par2")!!.readAllBytes()
+        val truncated = par2Data.copyOf(SECOND_FILE_DESC_OFFSET + 1)
+
+        listOf(truncated.inputStream(), OneBytePerReadInputStream(truncated)).forEach { input ->
+            assertEquals(listOf("testfile.part2.rar"), Par2Parser.parse(input).files.map { it.filename })
+        }
+    }
+
+    /** Hands out at most one byte per read, like a network stream delivering data in small pieces. */
+    private class OneBytePerReadInputStream(data: ByteArray) : InputStream() {
+        private val delegate = data.inputStream()
+
+        override fun read(): Int = delegate.read()
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int = delegate.read(b, off, minOf(len, 1))
+    }
+
+    private companion object {
+        // test.par2 packets: Main (0-108), FileDesc part2 (108-248), FileDesc part1 (248-388), IFSC, IFSC, Creator
+        const val SECOND_FILE_DESC_OFFSET = 248
     }
 }

@@ -89,8 +89,4 @@ internal object BinaryWriteUtils {
         buf.putLong(value)
         return buf.array()
     }
-
-    fun ByteArrayOutputStream.writeBytes(bytes: ByteArray) {
-        write(bytes)
-    }
 }

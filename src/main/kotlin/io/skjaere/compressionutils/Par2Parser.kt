@@ -119,7 +119,7 @@ object Par2Parser {
 
                 if (firstByte == 0x50) { // 'P' - potential start of PAR2 magic
                     header[0] = firstByte.toByte()
-                    headerRead = input.readNBytes(header, 1, HEADER_SIZE.toInt() - 1) + 1
+                    headerRead = input.readUpTo(header, 1, HEADER_SIZE.toInt() - 1) + 1
                     break
                 } else {
                     // Skip this byte (padding)
@@ -158,7 +158,7 @@ object Par2Parser {
             // Read packet body
             val body = if (bodySize > 0) {
                 val bodyBytes = ByteArray(bodySize)
-                val bodyRead = input.readNBytes(bodyBytes, 0, bodySize)
+                val bodyRead = input.readUpTo(bodyBytes, 0, bodySize)
                 if (bodyRead < bodySize) break // Truncated data — return results collected so far
                 bodyBytes
             } else {
@@ -225,6 +225,20 @@ object Par2Parser {
      */
     fun extractFilenamesBySize(input: InputStream): Map<Long, String> {
         return parse(input).files.associate { it.fileSize to it.filename }
+    }
+
+    /**
+     * Same as [InputStream.readNBytes] (reads until [len] bytes or end of stream, returns the
+     * count, never -1), which Android only has from API 33 and D8 does not backport.
+     */
+    private fun InputStream.readUpTo(b: ByteArray, off: Int, len: Int): Int {
+        var n = 0
+        while (n < len) {
+            val count = read(b, off + n, len - n)
+            if (count < 0) break
+            n += count
+        }
+        return n
     }
 
     private fun parseFileDescription(body: ByteArray): Par2FileDescription? {

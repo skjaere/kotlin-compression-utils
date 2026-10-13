@@ -3,7 +3,6 @@ package io.skjaere.compressionutils.generation
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.crc32
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.encodeVInt
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeLE32
-import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeBytes
 import java.io.ByteArrayOutputStream
 
 internal object Rar5Generator {
@@ -95,11 +94,11 @@ internal object Rar5Generator {
             val chunk = data.copyOfRange(offset, offset + chunkSize)
 
             val vol = ByteArrayOutputStream()
-            vol.writeBytes(SIGNATURE)
-            vol.writeBytes(mainHeader)
-            vol.writeBytes(fileHeader)
-            vol.writeBytes(chunk)
-            vol.writeBytes(endHeader)
+            vol.write(SIGNATURE)
+            vol.write(mainHeader)
+            vol.write(fileHeader)
+            vol.write(chunk)
+            vol.write(endHeader)
 
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
@@ -112,11 +111,11 @@ internal object Rar5Generator {
 
     private fun generateSingleVolume(data: ByteArray, filename: String): ByteArray {
         val out = ByteArrayOutputStream()
-        out.writeBytes(SIGNATURE)
-        out.writeBytes(buildMainHeader())
-        out.writeBytes(buildFileHeader(data, filename, fileFlags = FILE_FLAG_HAS_CRC))
-        out.writeBytes(data)
-        out.writeBytes(buildEndHeader())
+        out.write(SIGNATURE)
+        out.write(buildMainHeader())
+        out.write(buildFileHeader(data, filename, fileFlags = FILE_FLAG_HAS_CRC))
+        out.write(data)
+        out.write(buildEndHeader())
         return out.toByteArray()
     }
 
@@ -136,16 +135,16 @@ internal object Rar5Generator {
             if (!isFirst) fileFlags = fileFlags or FILE_FLAG_SPLIT_BEFORE
 
             val vol = ByteArrayOutputStream()
-            vol.writeBytes(SIGNATURE)
-            vol.writeBytes(buildMainHeader())
-            vol.writeBytes(buildFileHeader(
+            vol.write(SIGNATURE)
+            vol.write(buildMainHeader())
+            vol.write(buildFileHeader(
                 fullData = data,
                 filename = filename,
                 fileFlags = fileFlags,
                 dataSize = chunk.size.toLong()
             ))
-            vol.writeBytes(chunk)
-            vol.writeBytes(buildEndHeader())
+            vol.write(chunk)
+            vol.write(buildEndHeader())
 
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
@@ -168,13 +167,13 @@ internal object Rar5Generator {
 
         if (totalSingleVolumeSize <= volumeSize) {
             val out = ByteArrayOutputStream()
-            out.writeBytes(SIGNATURE)
-            out.writeBytes(mainHeader)
+            out.write(SIGNATURE)
+            out.write(mainHeader)
             for (file in files) {
-                out.writeBytes(buildFileHeader(file.data, file.filename, FILE_FLAG_HAS_CRC))
-                out.writeBytes(file.data)
+                out.write(buildFileHeader(file.data, file.filename, FILE_FLAG_HAS_CRC))
+                out.write(file.data)
             }
-            out.writeBytes(endHeader)
+            out.write(endHeader)
             return listOf(ArchiveVolume("archive.rar", out.toByteArray()))
         }
 
@@ -195,8 +194,8 @@ internal object Rar5Generator {
 
         while (fileIdx < files.size) {
             val vol = ByteArrayOutputStream()
-            vol.writeBytes(SIGNATURE)
-            vol.writeBytes(mainHeader)
+            vol.write(SIGNATURE)
+            vol.write(mainHeader)
 
             var remaining = volumeSize - fixedOverhead
 
@@ -223,7 +222,7 @@ internal object Rar5Generator {
 
                 val actualHeader = buildFileHeader(file.data, file.filename, fileFlags, chunkSize.toLong())
 
-                vol.writeBytes(actualHeader)
+                vol.write(actualHeader)
                 vol.write(file.data, fileOffset, chunkSize)
                 remaining -= actualHeader.size + chunkSize
 
@@ -236,7 +235,7 @@ internal object Rar5Generator {
                 }
             }
 
-            vol.writeBytes(endHeader)
+            vol.write(endHeader)
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
             volIdx++
@@ -254,26 +253,26 @@ internal object Rar5Generator {
 
         // Build header content (type + flags + optional data size + body) to calculate headerSize
         val headerContent = ByteArrayOutputStream()
-        headerContent.writeBytes(encodeVInt(type.toLong()))
-        headerContent.writeBytes(encodeVInt(actualFlags))
+        headerContent.write(encodeVInt(type.toLong()))
+        headerContent.write(encodeVInt(actualFlags))
         if (dataSize != null) {
-            headerContent.writeBytes(encodeVInt(dataSize))
+            headerContent.write(encodeVInt(dataSize))
         }
-        headerContent.writeBytes(bodyContent)
+        headerContent.write(bodyContent)
         val headerContentBytes = headerContent.toByteArray()
 
         // headerSize = size of headerContent
         val headerSizeVint = encodeVInt(headerContentBytes.size.toLong())
 
-        inner.writeBytes(headerSizeVint)
-        inner.writeBytes(headerContentBytes)
+        inner.write(headerSizeVint)
+        inner.write(headerContentBytes)
 
         val innerBytes = inner.toByteArray()
         val crc = crc32(innerBytes)
 
         val out = ByteArrayOutputStream()
-        out.writeBytes(writeLE32(crc))
-        out.writeBytes(innerBytes)
+        out.write(writeLE32(crc))
+        out.write(innerBytes)
         return out.toByteArray()
     }
 
@@ -309,19 +308,19 @@ internal object Rar5Generator {
         val dataCrc = crc32(fullData)
 
         val body = ByteArrayOutputStream()
-        body.writeBytes(encodeVInt(fileFlags))
-        body.writeBytes(encodeVInt(fullData.size.toLong()))   // unpacked size (full file size)
-        body.writeBytes(encodeVInt(0))                        // attributes = 0
+        body.write(encodeVInt(fileFlags))
+        body.write(encodeVInt(fullData.size.toLong()))        // unpacked size (full file size)
+        body.write(encodeVInt(0))                             // attributes = 0
 
         // CRC32 (if HAS_CRC flag set)
         if (fileFlags and FILE_FLAG_HAS_CRC != 0L) {
-            body.writeBytes(writeLE32(dataCrc))
+            body.write(writeLE32(dataCrc))
         }
 
-        body.writeBytes(encodeVInt(0))                        // compressionInfo = 0 (store)
-        body.writeBytes(encodeVInt(0))                        // hostOS = 0
-        body.writeBytes(encodeVInt(nameBytes.size.toLong()))  // name length
-        body.writeBytes(nameBytes)                            // name
+        body.write(encodeVInt(0))                             // compressionInfo = 0 (store)
+        body.write(encodeVInt(0))                             // hostOS = 0
+        body.write(encodeVInt(nameBytes.size.toLong()))       // name length
+        body.write(nameBytes)                                 // name
 
         return buildHeader(HEAD_FILE, 0L, body.toByteArray(), dataSize)
     }

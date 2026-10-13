@@ -4,7 +4,6 @@ import io.skjaere.compressionutils.generation.BinaryWriteUtils.crc32
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.encode7zUInt64
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeLE32
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeLE64
-import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeBytes
 import java.io.ByteArrayOutputStream
 
 internal object SevenZipGenerator {
@@ -76,31 +75,31 @@ internal object SevenZipGenerator {
 
         // Build the start header content (16 bytes: offset + size + nextHeaderCrc)
         val startHeaderContent = ByteArrayOutputStream(16)
-        startHeaderContent.writeBytes(writeLE64(nextHeaderOffset))
-        startHeaderContent.writeBytes(writeLE64(nextHeaderSize))
+        startHeaderContent.write(writeLE64(nextHeaderOffset))
+        startHeaderContent.write(writeLE64(nextHeaderSize))
         val startHeaderContentBytes = startHeaderContent.toByteArray()
 
         // Compute startHeaderCRC manually over the full 20 bytes: offset(8) + size(8) + nextHeaderCRC(4)
         val crcInput = ByteArrayOutputStream(20)
-        crcInput.writeBytes(startHeaderContentBytes)
-        crcInput.writeBytes(writeLE32(nextHeaderCrc))
+        crcInput.write(startHeaderContentBytes)
+        crcInput.write(writeLE32(nextHeaderCrc))
         val startHeaderCrc = crc32(crcInput.toByteArray())
 
         // Build the full archive
         val out = ByteArrayOutputStream()
 
         // Signature header (32 bytes)
-        out.writeBytes(MAGIC)                              // 6 bytes: magic
+        out.write(MAGIC)                                   // 6 bytes: magic
         out.write(0x00); out.write(0x04)                   // 2 bytes: version (0.4)
-        out.writeBytes(writeLE32(startHeaderCrc))          // 4 bytes: start header CRC
-        out.writeBytes(startHeaderContentBytes)            // 16 bytes: offset + size
-        out.writeBytes(writeLE32(nextHeaderCrc))           // 4 bytes: next header CRC
+        out.write(writeLE32(startHeaderCrc))               // 4 bytes: start header CRC
+        out.write(startHeaderContentBytes)                 // 16 bytes: offset + size
+        out.write(writeLE32(nextHeaderCrc))                // 4 bytes: next header CRC
 
         // File data (raw, uncompressed)
-        out.writeBytes(data)
+        out.write(data)
 
         // Metadata section
-        out.writeBytes(metadata)
+        out.write(metadata)
 
         return out.toByteArray()
     }
@@ -116,16 +115,16 @@ internal object SevenZipGenerator {
 
         // kPackInfo
         out.write(kPackInfo)
-        out.writeBytes(encode7zUInt64(0))          // packPos = 0 (relative to signature header end)
-        out.writeBytes(encode7zUInt64(1))          // numPackStreams = 1
+        out.write(encode7zUInt64(0))               // packPos = 0 (relative to signature header end)
+        out.write(encode7zUInt64(1))               // numPackStreams = 1
         out.write(kSize)
-        out.writeBytes(encode7zUInt64(dataSize))   // size of the packed stream
+        out.write(encode7zUInt64(dataSize))        // size of the packed stream
         out.write(kEnd)                            // end of kPackInfo
 
         // kUnPackInfo
         out.write(kUnPackInfo)
         out.write(kFolder)
-        out.writeBytes(encode7zUInt64(1))          // numFolders = 1
+        out.write(encode7zUInt64(1))               // numFolders = 1
         out.write(0x00)                            // external = 0
 
         // Folder: 1 coder, Copy codec (0x00)
@@ -134,29 +133,29 @@ internal object SevenZipGenerator {
         out.write(0x00)                            // codec ID: Copy
 
         out.write(kCodersUnPackSize)
-        out.writeBytes(encode7zUInt64(dataSize))   // unpack size
+        out.write(encode7zUInt64(dataSize))        // unpack size
         out.write(kEnd)                            // end of kUnPackInfo
 
         // kSubStreamsInfo
         out.write(kSubStreamsInfo)
         out.write(kCRC)
         out.write(0x01)                            // allDefined = 1
-        out.writeBytes(writeLE32(dataCrc))         // CRC32 of file data
+        out.write(writeLE32(dataCrc))              // CRC32 of file data
         out.write(kEnd)                            // end of kSubStreamsInfo
 
         out.write(kEnd)                            // end of kMainStreamsInfo
 
         // kFilesInfo
         out.write(kFilesInfo)
-        out.writeBytes(encode7zUInt64(1))          // numFiles = 1
+        out.write(encode7zUInt64(1))               // numFiles = 1
 
         // kName property
         out.write(kName)
         val nameBytes = encodeFilenameUtf16LE(filename)
         val namePropertySize = 1 + nameBytes.size  // 1 byte for external flag + name data
-        out.writeBytes(encode7zUInt64(namePropertySize.toLong()))
+        out.write(encode7zUInt64(namePropertySize.toLong()))
         out.write(0x00)                            // external = 0
-        out.writeBytes(nameBytes)
+        out.write(nameBytes)
 
         out.write(kEnd)                            // end of kFilesInfo
 

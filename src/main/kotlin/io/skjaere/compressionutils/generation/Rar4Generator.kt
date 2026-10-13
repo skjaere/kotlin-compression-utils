@@ -4,7 +4,6 @@ import io.skjaere.compressionutils.generation.BinaryWriteUtils.crc16
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.crc32
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeLE16
 import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeLE32
-import io.skjaere.compressionutils.generation.BinaryWriteUtils.writeBytes
 import java.io.ByteArrayOutputStream
 
 internal object Rar4Generator {
@@ -53,11 +52,11 @@ internal object Rar4Generator {
 
     private fun generateSingleVolume(data: ByteArray, filename: String): ByteArray {
         val out = ByteArrayOutputStream()
-        out.writeBytes(SIGNATURE)
-        out.writeBytes(buildArchiveHeader(isVolume = false, isFirstVolume = false))
-        out.writeBytes(buildFileHeader(data, filename, data.size.toLong(), 0))
-        out.writeBytes(data)
-        out.writeBytes(buildEndHeader(hasNextVolume = false))
+        out.write(SIGNATURE)
+        out.write(buildArchiveHeader(isVolume = false, isFirstVolume = false))
+        out.write(buildFileHeader(data, filename, data.size.toLong(), 0))
+        out.write(data)
+        out.write(buildEndHeader(hasNextVolume = false))
         return out.toByteArray()
     }
 
@@ -77,11 +76,11 @@ internal object Rar4Generator {
             if (!isFirst) fileFlags = fileFlags or FILE_FLAG_SPLIT_BEFORE
 
             val vol = ByteArrayOutputStream()
-            vol.writeBytes(SIGNATURE)
-            vol.writeBytes(buildArchiveHeader(isVolume = true, isFirstVolume = isFirst))
-            vol.writeBytes(buildFileHeader(data, filename, chunk.size.toLong(), fileFlags))
-            vol.writeBytes(chunk)
-            vol.writeBytes(buildEndHeader(hasNextVolume = !isLast))
+            vol.write(SIGNATURE)
+            vol.write(buildArchiveHeader(isVolume = true, isFirstVolume = isFirst))
+            vol.write(buildFileHeader(data, filename, chunk.size.toLong(), fileFlags))
+            vol.write(chunk)
+            vol.write(buildEndHeader(hasNextVolume = !isLast))
 
             val volFilename = if (isFirst) {
                 "archive.rar"
@@ -112,11 +111,11 @@ internal object Rar4Generator {
             if (!isFirst) fileFlags = fileFlags or FILE_FLAG_SPLIT_BEFORE
 
             val vol = ByteArrayOutputStream()
-            vol.writeBytes(SIGNATURE)
-            vol.writeBytes(buildArchiveHeader(isVolume = true, isFirstVolume = isFirst))
-            vol.writeBytes(buildFileHeader(data, filename, chunk.size.toLong(), fileFlags))
-            vol.writeBytes(chunk)
-            vol.writeBytes(buildEndHeader(hasNextVolume = !isLast))
+            vol.write(SIGNATURE)
+            vol.write(buildArchiveHeader(isVolume = true, isFirstVolume = isFirst))
+            vol.write(buildFileHeader(data, filename, chunk.size.toLong(), fileFlags))
+            vol.write(chunk)
+            vol.write(buildEndHeader(hasNextVolume = !isLast))
 
             val volFilename = if (isFirst) {
                 "archive.rar"
@@ -149,16 +148,16 @@ internal object Rar4Generator {
         // Build content after CRC: type + flags + size + reserved
         val content = ByteArrayOutputStream()
         content.write(BLOCK_ARCHIVE)
-        content.writeBytes(writeLE16(flags))
-        content.writeBytes(writeLE16(13))  // total block size = 13
+        content.write(writeLE16(flags))
+        content.write(writeLE16(13))       // total block size = 13
         content.write(ByteArray(6))        // reserved
 
         val contentBytes = content.toByteArray()
         val crc = crc16(contentBytes)
 
         val out = ByteArrayOutputStream()
-        out.writeBytes(writeLE16(crc))
-        out.writeBytes(contentBytes)
+        out.write(writeLE16(crc))
+        out.write(contentBytes)
         return out.toByteArray()
     }
 
@@ -194,25 +193,25 @@ internal object Rar4Generator {
         // Build content after CRC: type + flags + size + fields + name
         val content = ByteArrayOutputStream()
         content.write(BLOCK_FILE)                                  // type
-        content.writeBytes(writeLE16(fileFlags))                   // flags
-        content.writeBytes(writeLE16(blockSize))                   // block size
-        content.writeBytes(writeLE32(packSize.toInt()))            // pack size (low 32)
-        content.writeBytes(writeLE32(fullData.size))               // unpack size (low 32)
+        content.write(writeLE16(fileFlags))                        // flags
+        content.write(writeLE16(blockSize))                        // block size
+        content.write(writeLE32(packSize.toInt()))                 // pack size (low 32)
+        content.write(writeLE32(fullData.size))                    // unpack size (low 32)
         content.write(0x00)                                        // host OS (0 = MSDOS)
-        content.writeBytes(writeLE32(dataCrc))                     // file CRC32
-        content.writeBytes(writeLE32(0))                           // ftime (0 = no time)
+        content.write(writeLE32(dataCrc))                          // file CRC32
+        content.write(writeLE32(0))                                // ftime (0 = no time)
         content.write(29)                                          // unpack version = 29
         content.write(0x30)                                        // method = 0x30 (store)
-        content.writeBytes(writeLE16(nameBytes.size))              // name length
-        content.writeBytes(writeLE32(0x20))                        // attributes (archive)
-        content.writeBytes(nameBytes)                              // filename
+        content.write(writeLE16(nameBytes.size))                   // name length
+        content.write(writeLE32(0x20))                             // attributes (archive)
+        content.write(nameBytes)                                   // filename
 
         val contentBytes = content.toByteArray()
         val crc = crc16(contentBytes)
 
         val out = ByteArrayOutputStream()
-        out.writeBytes(writeLE16(crc))
-        out.writeBytes(contentBytes)
+        out.write(writeLE16(crc))
+        out.write(contentBytes)
         return out.toByteArray()
     }
 
@@ -231,15 +230,15 @@ internal object Rar4Generator {
 
         val content = ByteArrayOutputStream()
         content.write(BLOCK_END)
-        content.writeBytes(writeLE16(flags))
-        content.writeBytes(writeLE16(7))
+        content.write(writeLE16(flags))
+        content.write(writeLE16(7))
 
         val contentBytes = content.toByteArray()
         val crc = crc16(contentBytes)
 
         val out = ByteArrayOutputStream()
-        out.writeBytes(writeLE16(crc))
-        out.writeBytes(contentBytes)
+        out.write(writeLE16(crc))
+        out.write(contentBytes)
         return out.toByteArray()
     }
 }

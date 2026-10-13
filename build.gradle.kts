@@ -12,10 +12,11 @@ repositories {
     mavenCentral()
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
-    }
     withSourcesJar()
 }
 

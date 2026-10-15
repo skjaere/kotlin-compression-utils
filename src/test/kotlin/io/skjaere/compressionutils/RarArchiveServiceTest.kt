@@ -14,7 +14,7 @@ class RarArchiveServiceTest {
     private val service = RarArchiveService()
 
     @Test
-    fun `listFiles throws on invalid data`() = runBlocking {
+    fun `listFiles throws on invalid data`(): Unit = runBlocking {
         val invalidData = ByteArray(10) { 0 }
         assertFailsWith<IOException> {
             service.listFiles(ByteArrayInputStream(invalidData))
@@ -22,7 +22,7 @@ class RarArchiveServiceTest {
     }
 
     @Test
-    fun `listFiles throws on too-short data`() = runBlocking {
+    fun `listFiles throws on too-short data`(): Unit = runBlocking {
         val shortData = ByteArray(3) { 0x52 }
         assertFailsWith<IOException> {
             service.listFiles(ByteArrayInputStream(shortData))

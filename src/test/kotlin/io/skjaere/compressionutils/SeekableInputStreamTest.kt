@@ -46,7 +46,7 @@ class SeekableInputStreamTest {
     }
 
     @Test
-    fun `BufferedSeekableInputStream backward seek throws`() = runBlocking {
+    fun `BufferedSeekableInputStream backward seek throws`(): Unit = runBlocking {
         val data = ByteArray(100) { it.toByte() }
         val stream = BufferedSeekableInputStream(ByteArrayInputStream(data))
         stream.seek(50)

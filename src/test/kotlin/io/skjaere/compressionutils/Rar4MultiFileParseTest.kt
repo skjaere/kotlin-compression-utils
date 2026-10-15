@@ -214,7 +214,7 @@ class Rar4MultiFileParseTest {
     }
 
     @Test
-    fun `parse finds multiple additional files across volumes after split file`() = runBlocking {
+    fun `parse finds multiple additional files across volumes after split file`(): Unit = runBlocking {
         val bigfileTotal = 100
         val bigfileChunk0 = 80
         val bigfileChunk1 = bigfileTotal - bigfileChunk0 // 20
@@ -258,7 +258,7 @@ class Rar4MultiFileParseTest {
     }
 
     @Test
-    fun `parse finds all files without volumeSizes optimization`() = runBlocking {
+    fun `parse finds all files without volumeSizes optimization`(): Unit = runBlocking {
         val bigfileTotal = 200
         val bigfileChunk0 = 80
         val bigfileChunk1 = 80
@@ -356,7 +356,7 @@ class Rar4MultiFileParseTest {
     }
 
     @Test
-    fun `parse infers correct split positions for file starting mid-volume`() = runBlocking {
+    fun `parse infers correct split positions for file starting mid-volume`(): Unit = runBlocking {
         val bigfileTotal = 200
         val midfileTotal = 150
         val smallSize = 20

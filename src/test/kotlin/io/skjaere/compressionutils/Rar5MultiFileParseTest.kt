@@ -216,7 +216,7 @@ class Rar5MultiFileParseTest {
     }
 
     @Test
-    fun `parse finds files across three volumes with multiple files`() = runBlocking {
+    fun `parse finds files across three volumes with multiple files`(): Unit = runBlocking {
         // Split file spans vol 0-1, additional files in vol 1 and vol 2.
         val bigfileTotal = 300
         val bigfileChunk0 = 200
@@ -339,7 +339,7 @@ class Rar5MultiFileParseTest {
     }
 
     @Test
-    fun `multi-file archive without volumeSizes falls back to normal parsing`() = runBlocking {
+    fun `multi-file archive without volumeSizes falls back to normal parsing`(): Unit = runBlocking {
         // Same layout as the first test, but without volumeSizes.
         // Parser must walk all volumes.
         val bigfileTotal = 200

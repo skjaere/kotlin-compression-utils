@@ -22,7 +22,7 @@ java {
 
 dependencies {
     implementation(libs.slf4j.api)
-    implementation(libs.kotlinx.coroutines.core)
+    api(libs.kotlinx.coroutines.core) // CoroutineDispatcher is in the stream adapters' constructors
     implementation(libs.xz)
 
     testImplementation(libs.kotlin.test)

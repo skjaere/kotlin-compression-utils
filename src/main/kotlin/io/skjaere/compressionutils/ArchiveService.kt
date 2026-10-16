@@ -129,9 +129,15 @@ object ArchiveService {
      * Resolves obfuscated volume filenames (if PAR2 data is provided) and sorts
      * volumes into the correct archive volume order.
      *
+     * RAR5 volumes whose first 16 KB are known are ordered by the place their main archive
+     * headers give them ([Rar5Parser.volumeNumber]), which holds whatever name they were posted
+     * under: see [byHeaders].
+     *
      * @param volumes Volume metadata (possibly with obfuscated filenames)
      * @param par2Data Raw PAR2 file data for resolving obfuscated filenames (optional)
      * @return Volumes with resolved filenames, sorted in correct archive order
+     * @throws MissingArchiveVolumeException when a set's headers show it lacks a volume
+     * @throws ConflictingArchiveVolumesException when two volumes' headers give one place in a set
      */
     fun resolveVolumes(
         volumes: List<VolumeMetaData>,
@@ -186,9 +192,76 @@ object ArchiveService {
         // Null for the volumes alone in their set, which go together; each group where its first is listed.
         val groups = sets.map { set -> set.takeIf { sizes.getValue(it) > 1 } }
         val positions = groups.map(groups::indexOf)
-        return volumes.indices
-            .sortedWith(compareBy({ keys[it] == Int.MAX_VALUE }, { positions[it] }, { keys[it] }))
-            .map(volumes::get)
+        val byName = volumes.indices.sortedWith(compareBy({ keys[it] == Int.MAX_VALUE }, { positions[it] }, { keys[it] }))
+        val loose = volumes.indices.filter { groups[it] == null || keys[it] == Int.MAX_VALUE }.toSet()
+        return byHeaders(volumes, byName, loose).map(volumes::get)
+    }
+
+    /**
+     * [order] (indices of [volumes], as their names order them) with the RAR5 volumes whose
+     * headers give their place in their set ([Rar5Parser.volumeNumber]) in that order instead
+     * (NR-21), each set where its first in [order] is:
+     * - a set names group, when every volume of it gives its place: the headers win where the
+     *   names give another order, which is logged;
+     * - the volumes of [loose] (which names don't group, or don't place) that give their place,
+     *   when one of them is past its set's first (a volume obfuscated by itself, or posted under a
+     *   name that gives no place): those join the one set they make whole, else are a set.
+     * A set whose places skip one lacks a volume ([MissingArchiveVolumeException]); one where two
+     * volumes give the same can't be ordered ([ConflictingArchiveVolumesException]). Volumes of
+     * other formats, single-volume archives, and those whose first 16 KB aren't known or whose
+     * headers are encrypted keep the order their names give.
+     */
+    private fun byHeaders(volumes: List<VolumeMetaData>, order: List<Int>, loose: Set<Int>): List<Int> {
+        val places = volumes.map { it.first16kb?.let(Rar5Parser::volumeNumber) }
+        val unplaced = order.filter { it in loose && places[it] != null }.takeIf { set -> set.any { places[it]!! > 0 } }.orEmpty()
+        val named = order.filterNot { it in loose }.groupBy { setName(volumes[it].filename) }.values
+            .filter { set -> set.all { places[it] != null } }
+        named.filter { set -> set != set.sortedBy { places[it] } }.forEach { set ->
+            logger.warn(
+                "Archive volumes {} are named in another order than their headers give them; ordering them as the headers do",
+                set.map { volumes[it].filename },
+            )
+        }
+        val completed = named.filter { set -> isWhole((set + unplaced).map { places[it]!! }) }.singleOrNull()
+            ?.takeIf { unplaced.isNotEmpty() }
+        val sets = named.map { set -> if (set === completed) set + unplaced else set } +
+            listOfNotNull(unplaced.takeIf { it.isNotEmpty() && completed == null })
+        if (unplaced.isNotEmpty()) {
+            logger.info(
+                "Placing archive volumes {}, whose names don't give their place, as their headers do{}",
+                unplaced.map { volumes[it].filename }, completed?.let { " in the set of ${volumes[it.first()].filename}" }.orEmpty(),
+            )
+        }
+        sets.forEach { set -> checkWhole(set.map { volumes[it].filename }, set.map { places[it]!! }) }
+        val setOf = sets.flatMap { set -> set.map { it to set } }.toMap()
+        val placed = mutableSetOf<Int>()
+        return order.flatMap { i ->
+            val set = setOf[i] ?: return@flatMap listOf(i)
+            if (placed.add(set.first())) set.sortedBy { places[it] } else emptyList()
+        }
+    }
+
+    /** Whether [places] are each place of a set once, from its first: 0, 1, 2, ... in any order. */
+    private fun isWhole(places: List<Int>): Boolean = places.sorted() == places.indices.toList()
+
+    /** Throws when the volumes [names] of one set, at [places], don't each give one place from the first. */
+    private fun checkWhole(names: List<String>, places: List<Int>) {
+        val counts = places.groupingBy { it }.eachCount()
+        counts.entries.firstOrNull { it.value > 1 }?.let { (place, _) ->
+            val claiming = names.filterIndexed { i, _ -> places[i] == place }
+            throw ConflictingArchiveVolumesException(
+                place, names,
+                "Archive volumes ${claiming.joinToString()} give the same place in their set in their headers " +
+                    "(volume ${place + 1}): which goes where can't be told",
+            )
+        }
+        places.indices.firstOrNull { it !in counts }?.let { place ->
+            throw MissingArchiveVolumeException(
+                place, names,
+                "The archive set of ${names.first()} lacks its volume ${place + 1}, as the headers of the " +
+                    "${names.size} volumes it holds show",
+            )
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ package io.skjaere.compressionutils
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.CRC32
 
 class Rar5Parser {
     private val logger = LoggerFactory.getLogger(Rar5Parser::class.java)
@@ -36,6 +37,61 @@ class Rar5Parser {
         // RAR 5.x block header flags (split indicators are in the block-level header, not file flags)
         private const val RAR5_BLOCK_FLAG_SPLIT_BEFORE = 0x08  // Data continues from previous volume
         private const val RAR5_BLOCK_FLAG_SPLIT_AFTER = 0x10   // Data continues in next volume
+
+        // RAR 5.x archive flags (main archive header body): the archive is a volume of a set, and
+        // the header gives its volume number (every volume's but the first's).
+        private const val RAR5_ARCHIVE_FLAG_VOLUME = 0x01L
+        private const val RAR5_ARCHIVE_FLAG_VOLUME_NUMBER = 0x02L
+
+        private val RAR5_SIGNATURE = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00)
+
+        /**
+         * The place in its set of the RAR5 volume that starts with [first16kb], as its main archive
+         * header gives it: 0 for the first volume (whose header gives no number), 1 for the second,
+         * and so on, whatever name it was posted under. Null when they don't start a volume of a
+         * RAR5 set with its main header whole and intact (its CRC): another format's, a
+         * single-volume archive's, one whose headers are encrypted (an encryption header comes
+         * first), or bytes cut short.
+         */
+        fun volumeNumber(first16kb: ByteArray): Int? {
+            if (first16kb.size < RAR5_SIGNATURE.size + 4 ||
+                !first16kb.copyOf(RAR5_SIGNATURE.size).contentEquals(RAR5_SIGNATURE)
+            ) return null
+            // The header's CRC32 covers it from its size on.
+            val start = RAR5_SIGNATURE.size + 4
+            val (headerSize, sizeLength) = readVIntFromArray(first16kb, start) ?: return null
+            if (headerSize <= 0 || headerSize > first16kb.size) return null
+            val end = start + sizeLength + headerSize.toInt()
+            if (end > first16kb.size) return null
+            val crc = ByteBuffer.wrap(first16kb, start - 4, 4).order(ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+            if (CRC32().apply { update(first16kb, start, end - start) }.value != crc) return null
+            var position = start + sizeLength
+            fun next(): Long? = readVIntFromArray(first16kb, position)
+                ?.takeIf { (_, length) -> position + length <= end }
+                ?.let { (value, length) -> position += length; value }
+            if (next() != RAR5_HEAD_MAIN.toLong()) return null
+            val headerFlags = next() ?: return null
+            if (headerFlags and 0x01L != 0L) next() ?: return null // extra area size
+            if (headerFlags and 0x02L != 0L) next() ?: return null // data area size
+            val archiveFlags = next() ?: return null
+            if (archiveFlags and RAR5_ARCHIVE_FLAG_VOLUME == 0L) return null
+            if (archiveFlags and RAR5_ARCHIVE_FLAG_VOLUME_NUMBER == 0L) return 0
+            return next()?.takeIf { it in 0..Int.MAX_VALUE }?.toInt()
+        }
+
+        private fun readVIntFromArray(bytes: ByteArray, offset: Int): Pair<Long, Int>? {
+            var value = 0L
+            var bytesRead = 0
+            var pos = offset
+            while (bytesRead < 10 && pos < bytes.size) {
+                val b = bytes[pos].toInt() and 0xFF
+                value = value or ((b and 0x7F).toLong() shl (bytesRead * 7))
+                bytesRead++
+                pos++
+                if (b and 0x80 == 0) return value to bytesRead
+            }
+            return null
+        }
     }
 
     suspend fun parse(
@@ -342,8 +398,8 @@ class Rar5Parser {
                         val arcFlagsResult = readVInt(stream)
                         if (arcFlagsResult != null) {
                             val arcFlags = arcFlagsResult.first
-                            mainHeaderIsVolume = (arcFlags and 0x01L) != 0L
-                            mainHeaderHasVolumeNumber = (arcFlags and 0x02L) != 0L
+                            mainHeaderIsVolume = (arcFlags and RAR5_ARCHIVE_FLAG_VOLUME) != 0L
+                            mainHeaderHasVolumeNumber = (arcFlags and RAR5_ARCHIVE_FLAG_VOLUME_NUMBER) != 0L
                         }
                     }
                     logger.debug("Found main archive header at position $headerStartPosition, blockSize=$mainHeaderBlockSize, isVolume=$mainHeaderIsVolume, hasVolNum=$mainHeaderHasVolumeNumber")
@@ -952,20 +1008,6 @@ class Rar5Parser {
                 return plaintextBlock.copyOfRange(ivStart, ivStart + 16)
             }
             pos = recordEnd
-        }
-        return null
-    }
-
-    private fun readVIntFromArray(bytes: ByteArray, offset: Int): Pair<Long, Int>? {
-        var value = 0L
-        var bytesRead = 0
-        var pos = offset
-        while (bytesRead < 10 && pos < bytes.size) {
-            val b = bytes[pos].toInt() and 0xFF
-            value = value or ((b and 0x7F).toLong() shl (bytesRead * 7))
-            bytesRead++
-            pos++
-            if (b and 0x80 == 0) return value to bytesRead
         }
         return null
     }

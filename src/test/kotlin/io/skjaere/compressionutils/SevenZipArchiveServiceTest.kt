@@ -374,4 +374,26 @@ class SevenZipArchiveServiceTest {
         assertTrue(entry.isDirectory)
         assertEquals(0, entry.size)
     }
+
+    /**
+     * A 7z set that lacks a volume, or ends early, holds its end header past the end of its bytes:
+     * the archive is malformed as it is, not failing to be read (NR-20). The set whole lists its file.
+     */
+    @Test
+    fun `a 7z set whose end header lies past its end is a malformed archive`() {
+        val volumes = ArchiveGenerator.generate(kotlin.random.Random(7).nextBytes(200_000), 64L * 1024, ContainerType.SEVENZIP, "Movie.mkv").map { it.data }
+        assertEquals(4, volumes.size)
+        val whole = volumes.reduce(ByteArray::plus)
+        runBlocking {
+            assertEquals(listOf("Movie.mkv"), service.listFiles(ByteArraySeekableInputStream(whole)).map { it.path })
+        }
+        val withoutSecond = volumes.filterIndexed { v, _ -> v != 1 }.reduce(ByteArray::plus)
+        val withoutLast = volumes.dropLast(1).reduce(ByteArray::plus)
+        val cutShort = whole.copyOf(whole.size - 10)
+        listOf(withoutSecond, withoutLast, cutShort).forEach { bytes ->
+            assertFailsWith<MalformedSevenZipArchiveException>("${bytes.size} of ${whole.size} bytes") {
+                runBlocking { service.listFiles(ByteArraySeekableInputStream(bytes)) }
+            }
+        }
+    }
 }

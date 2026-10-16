@@ -24,12 +24,15 @@ class SevenZipParser {
      *
      * @param stream A SeekableInputStream positioned at the start of the archive
      * @return List of SevenZipFileEntry with metadata and calculated data offsets
+     * @throws MalformedSevenZipArchiveException if its headers lie past the end of [stream] (a set
+     *   that lacks a volume, or one cut short)
      * @throws IOException if the archive is invalid, compressed, or cannot be parsed
      */
     suspend fun parse(stream: SeekableInputStream): List<SevenZipFileEntry> {
         val (nextHeaderOffset, nextHeaderSize) = readSignatureHeader(stream)
 
         val metadataStart = SIGNATURE_HEADER_SIZE + nextHeaderOffset
+        checkWithin(stream, "end header", metadataStart, nextHeaderSize)
         stream.seek(metadataStart)
 
         val metadataBytes = ByteArray(nextHeaderSize.toInt())
@@ -139,6 +142,7 @@ class SevenZipParser {
             folder.codecId.joinToString("") { "%02x".format(it) },
             packedOffset, packedSize, unpackedSize)
 
+        checkWithin(stream, "encoded header", packedOffset, packInfo.packSizes[0])
         stream.seek(packedOffset)
         val packedData = ByteArray(packedSize)
         readFully(stream, packedData)
@@ -668,12 +672,29 @@ class SevenZipParser {
         readCrcs(buf, count) // just read and discard
     }
 
+    /**
+     * Throws when [what], [length] bytes from [start], doesn't lie within [stream] (by its size, when
+     * known): the archive lacks a volume, or is cut short, so the bytes there aren't its header.
+     */
+    private fun checkWithin(stream: SeekableInputStream, what: String, start: Long, length: Long) {
+        val size = stream.size()
+        if (start < 0 || length < 0 || size >= 0 && start + length > size) {
+            throw MalformedSevenZipArchiveException(
+                "The 7z archive's $what lies at bytes $start to ${start + length}, past the end of its $size bytes: " +
+                    "it lacks a volume, or is cut short"
+            )
+        }
+    }
+
+    /** Reads a header whole: the archive ending before it does is malformed ([MalformedSevenZipArchiveException]). */
     private suspend fun readFully(stream: SeekableInputStream, data: ByteArray) {
         var offset = 0
         while (offset < data.size) {
             val read = stream.read(data, offset, data.size - offset)
             if (read == -1) {
-                throw IOException("Unexpected end of stream at offset $offset (expected ${data.size} bytes)")
+                throw MalformedSevenZipArchiveException(
+                    "Unexpected end of stream at offset $offset (expected ${data.size} bytes): the 7z archive ends before its header does"
+                )
             }
             offset += read
         }

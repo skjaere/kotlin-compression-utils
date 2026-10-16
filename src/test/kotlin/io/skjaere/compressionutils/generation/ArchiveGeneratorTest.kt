@@ -133,6 +133,56 @@ class ArchiveGeneratorTest {
         assertContentEquals(testData, fullData)
     }
 
+    /**
+     * As RAR writes them, each volume of a RAR5 set gives its place in its main archive header: the
+     * "volume" archive flag, and the volume number on all but the first (1 for the second, ...). A
+     * single-volume archive's has neither. Each end-of-archive header says whether a volume follows.
+     */
+    @Test
+    fun `rar5 volumes give their place in the set in their headers`() {
+        val sets = listOf(
+            ArchiveGenerator.generate(testData, 400L, ContainerType.RAR5, testFilename),
+            ArchiveGenerator.generate(testData, 3, ContainerType.RAR5, testFilename),
+            ArchiveGenerator.generate(listOf(ArchiveFile("a.bin", testData), ArchiveFile("b.bin", testData)), 400L, ContainerType.RAR5),
+        )
+
+        sets.forEach { volumes ->
+            assertTrue(volumes.size > 1, "Expected multiple volumes")
+            val expected = volumes.indices.map { v -> if (v == 0) listOf(VOLUME) else listOf(VOLUME or VOLUME_NUMBER, v.toLong()) }
+            assertEquals(expected, volumes.map { rar5Body(it.data, HEAD_MAIN) })
+            assertEquals(volumes.indices.map { v -> listOf(if (v < volumes.lastIndex) MORE_VOLUMES else 0L) }, volumes.map { rar5Body(it.data, HEAD_ENDARC) })
+        }
+        val single = ArchiveGenerator.generate(testData, 1, ContainerType.RAR5, testFilename).single()
+        assertEquals(listOf(0L), rar5Body(single.data, HEAD_MAIN))
+        assertEquals(listOf(0L), rar5Body(single.data, HEAD_ENDARC))
+    }
+
+    /** The vints of the body of the first header of [type] in the RAR5 volume [data]. */
+    private fun rar5Body(data: ByteArray, type: Long): List<Long> {
+        var position = 8
+        fun vint(): Long {
+            var value = 0L
+            var shift = 0
+            do {
+                val byte = data[position++].toInt() and 0xFF
+                value = value or ((byte and 0x7F).toLong() shl shift)
+                shift += 7
+            } while (byte and 0x80 != 0)
+            return value
+        }
+        while (true) {
+            position += 4 // CRC32
+            val size = vint()
+            val end = position + size.toInt()
+            val headerType = vint()
+            val flags = vint()
+            if (flags and 0x01L != 0L) vint()
+            val dataSize = if (flags and 0x02L != 0L) vint() else 0L
+            if (headerType == type) return generateSequence { if (position < end) vint() else null }.toList()
+            position = end + dataSize.toInt()
+        }
+    }
+
     // --- RAR4 single volume ---
 
     @Test
@@ -378,5 +428,13 @@ class ArchiveGeneratorTest {
                 }
             }
         }
+    }
+
+    private companion object {
+        const val HEAD_MAIN = 1L
+        const val HEAD_ENDARC = 5L
+        const val VOLUME = 0x01L
+        const val VOLUME_NUMBER = 0x02L
+        const val MORE_VOLUMES = 0x01L
     }
 }

@@ -17,6 +17,13 @@ internal object Rar5Generator {
     // Header flag: has data area
     private const val HF_HAS_DATA = 0x02L
 
+    // Archive flags (main header): a volume of a set, and its volume number given (all but the first).
+    private const val ARCHIVE_FLAG_VOLUME = 0x01L
+    private const val ARCHIVE_FLAG_VOLUME_NUMBER = 0x02L
+
+    // End-of-archive flag: another volume follows.
+    private const val END_FLAG_MORE_VOLUMES = 0x01L
+
     // File flags
     private const val FILE_FLAG_HAS_CRC = 0x04L
     private const val FILE_FLAG_SPLIT_BEFORE = 0x08L
@@ -32,9 +39,7 @@ internal object Rar5Generator {
 
     fun generateWithVolumeSize(data: ByteArray, volumeSize: Long, filename: String): List<ArchiveVolume> {
         // Fixed overhead: SIGNATURE(8) + mainHeader + endHeader
-        val mainHeader = buildMainHeader()
-        val endHeader = buildEndHeader()
-        val fixedOverhead = SIGNATURE.size + mainHeader.size + endHeader.size
+        val fixedOverhead = SIGNATURE.size + buildMainHeader().size + buildEndHeader().size
 
         // Try to fit as single volume first
         val singleFileHeader = buildFileHeader(data, filename, fileFlags = FILE_FLAG_HAS_CRC)
@@ -44,17 +49,10 @@ internal object Rar5Generator {
             return listOf(ArchiveVolume("archive.rar", archiveBytes))
         }
 
-        return generateMultiVolumeBySize(data, volumeSize, filename, fixedOverhead, mainHeader, endHeader)
+        return generateMultiVolumeBySize(data, volumeSize, filename)
     }
 
-    private fun generateMultiVolumeBySize(
-        data: ByteArray,
-        volumeSize: Long,
-        filename: String,
-        fixedOverhead: Int,
-        mainHeader: ByteArray,
-        endHeader: ByteArray
-    ): List<ArchiveVolume> {
+    private fun generateMultiVolumeBySize(data: ByteArray, volumeSize: Long, filename: String): List<ArchiveVolume> {
         val volumes = mutableListOf<ArchiveVolume>()
         var offset = 0
         var volIdx = 0
@@ -62,6 +60,9 @@ internal object Rar5Generator {
         while (offset < data.size) {
             val isFirst = volIdx == 0
             val remaining = data.size - offset
+            // Each volume's main header gives its number (but the first's), so it grows with it.
+            val mainHeader = buildMainHeader(volIdx)
+            val fixedOverhead = SIGNATURE.size + mainHeader.size + buildEndHeader().size
 
             // Determine fileFlags for this volume (we don't know isLast yet, but we need it for header size)
             // Try with SPLIT_AFTER first, then adjust if this is the last volume
@@ -98,7 +99,7 @@ internal object Rar5Generator {
             vol.write(mainHeader)
             vol.write(fileHeader)
             vol.write(chunk)
-            vol.write(endHeader)
+            vol.write(buildEndHeader(moreVolumes = !isLast))
 
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
@@ -136,7 +137,7 @@ internal object Rar5Generator {
 
             val vol = ByteArrayOutputStream()
             vol.write(SIGNATURE)
-            vol.write(buildMainHeader())
+            vol.write(buildMainHeader(volIdx))
             vol.write(buildFileHeader(
                 fullData = data,
                 filename = filename,
@@ -144,7 +145,7 @@ internal object Rar5Generator {
                 dataSize = chunk.size.toLong()
             ))
             vol.write(chunk)
-            vol.write(buildEndHeader())
+            vol.write(buildEndHeader(moreVolumes = !isLast))
 
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
@@ -177,27 +178,22 @@ internal object Rar5Generator {
             return listOf(ArchiveVolume("archive.rar", out.toByteArray()))
         }
 
-        return generateMultiVolumeMultiFile(files, volumeSize, fixedOverhead, mainHeader, endHeader)
+        return generateMultiVolumeMultiFile(files, volumeSize)
     }
 
-    private fun generateMultiVolumeMultiFile(
-        files: List<ArchiveFile>,
-        volumeSize: Long,
-        fixedOverhead: Int,
-        mainHeader: ByteArray,
-        endHeader: ByteArray
-    ): List<ArchiveVolume> {
+    private fun generateMultiVolumeMultiFile(files: List<ArchiveFile>, volumeSize: Long): List<ArchiveVolume> {
         val volumes = mutableListOf<ArchiveVolume>()
         var fileIdx = 0
         var fileOffset = 0
         var volIdx = 0
 
         while (fileIdx < files.size) {
+            val mainHeader = buildMainHeader(volIdx)
             val vol = ByteArrayOutputStream()
             vol.write(SIGNATURE)
             vol.write(mainHeader)
 
-            var remaining = volumeSize - fixedOverhead
+            var remaining = volumeSize - (SIGNATURE.size + mainHeader.size + buildEndHeader().size)
 
             while (fileIdx < files.size && remaining > 0) {
                 val file = files[fileIdx]
@@ -235,7 +231,7 @@ internal object Rar5Generator {
                 }
             }
 
-            vol.write(endHeader)
+            vol.write(buildEndHeader(moreVolumes = fileIdx < files.size))
             val volFilename = "archive.part${volIdx + 1}.rar"
             volumes.add(ArchiveVolume(volFilename, vol.toByteArray()))
             volIdx++
@@ -276,13 +272,22 @@ internal object Rar5Generator {
         return out.toByteArray()
     }
 
-    private fun buildMainHeader(): ByteArray {
-        return buildHeader(HEAD_MAIN, 0L, ByteArray(0), null)
+    /**
+     * The main archive header of volume [volIdx] of a set (0 for the first), or of a single-volume
+     * archive when null: its archive flags, and the volume number but in the first volume's.
+     */
+    private fun buildMainHeader(volIdx: Int? = null): ByteArray {
+        val body = when (volIdx) {
+            null -> encodeVInt(0)
+            0 -> encodeVInt(ARCHIVE_FLAG_VOLUME)
+            else -> encodeVInt(ARCHIVE_FLAG_VOLUME or ARCHIVE_FLAG_VOLUME_NUMBER) + encodeVInt(volIdx.toLong())
+        }
+        return buildHeader(HEAD_MAIN, 0L, body, null)
     }
 
-    private fun buildEndHeader(): ByteArray {
-        return buildHeader(HEAD_ENDARC, 0L, ByteArray(0), null)
-    }
+    /** The end-of-archive header: its flags, which say whether another volume follows. */
+    private fun buildEndHeader(moreVolumes: Boolean = false): ByteArray =
+        buildHeader(HEAD_ENDARC, 0L, encodeVInt(if (moreVolumes) END_FLAG_MORE_VOLUMES else 0L), null)
 
     /**
      * Build a RAR5 file header.

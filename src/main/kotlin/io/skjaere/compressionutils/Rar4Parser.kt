@@ -391,8 +391,13 @@ class Rar4Parser {
 
                     // Only add if we haven't seen this file path before (multi-volume archives repeat headers)
                     if (seenFiles.add(fileEntry.path)) {
-                        // Check if we can infer remaining split positions from volume sizes
-                        if (hasSplitAfter && volumeSizes != null && fileEntry.compressionMethod == 0) {
+                        // Check if we can infer remaining split positions from volume sizes. As in
+                        // Rar5Parser, only for the first file, and (below) only when it fills every
+                        // volume to the last: the inferred parts are taken from whatever volumes
+                        // follow, so with another set's volumes among them (a season pack's next
+                        // episode, a film's subtitle archive) they would be read from those, and
+                        // their sizes, which only add room, would still sum to the file's.
+                        if (hasSplitAfter && volumeSizes != null && fileEntry.compressionMethod == 0 && entries.isEmpty()) {
                             val inferredParts = inferSplitPositions(
                                 fileEntry = fileEntry,
                                 firstPartDataStart = dataStartPos,
@@ -413,7 +418,8 @@ class Rar4Parser {
                             // but correct: real EOA markers / signatures drive the seeks instead
                             // of a guessed end-of-data position.
                             val inferredSize = inferredParts.sumOf { it.dataSize }
-                            if (inferredSize == fileEntry.uncompressedSize) {
+                            val fillsAllVolumes = (inferredParts.lastOrNull()?.volumeIndex ?: -1) >= volumeSizes.size - 1
+                            if (inferredSize == fileEntry.uncompressedSize && fillsAllVolumes) {
                                 val entryWithSplits = fileEntry.copy(splitParts = inferredParts)
                                 entries.add(entryWithSplits)
                                 logger.debug(
@@ -423,15 +429,22 @@ class Rar4Parser {
                                 skipRemainingVolumes = true
                                 inferredSplitParts = inferredParts
                             } else {
-                                val shortfall = fileEntry.uncompressedSize - inferredSize
-                                logger.info(
-                                    "Inference for {} produced {} bytes across {} parts but file " +
-                                            "is {} bytes (short by {} bytes — likely a recovery " +
-                                            "record or other per-volume sub-block). Falling back to " +
-                                            "per-volume parsing.",
-                                    fileEntry.path, inferredSize, inferredParts.size,
-                                    fileEntry.uncompressedSize, shortfall,
-                                )
+                                if (inferredSize != fileEntry.uncompressedSize) {
+                                    val shortfall = fileEntry.uncompressedSize - inferredSize
+                                    logger.info(
+                                        "Inference for {} produced {} bytes across {} parts but file " +
+                                                "is {} bytes (short by {} bytes — likely a recovery " +
+                                                "record or other per-volume sub-block). Falling back to " +
+                                                "per-volume parsing.",
+                                        fileEntry.path, inferredSize, inferredParts.size,
+                                        fileEntry.uncompressedSize, shortfall,
+                                    )
+                                } else {
+                                    logger.debug(
+                                        "Found split file: {}, ends at vol {} of {}, using normal parsing",
+                                        fileEntry.path, inferredParts.lastOrNull()?.volumeIndex, volumeSizes.size,
+                                    )
+                                }
                                 val entryWithSplits =
                                     fileEntry.copy(splitParts = fileSplitInfo[fileEntry.path]!!.toList())
                                 entries.add(entryWithSplits)

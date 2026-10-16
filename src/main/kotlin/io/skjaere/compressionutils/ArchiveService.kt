@@ -166,11 +166,34 @@ object ArchiveService {
         // an empty list, surfacing as silent data loss downstream. The
         // .jpg/.nfo concern is unaffected — that scenario has at least one
         // real archive volume alongside, so the filter still keeps only those.
-        val archiveVolumes = resolved
-            .filter { it.isArchiveVolume() }
-            .sortedBy { volumeSortKey(it.filename) }
+        val archiveVolumes = inArchiveOrder(resolved.filter { it.isArchiveVolume() })
         return archiveVolumes.ifEmpty { resolved }
     }
+
+    /**
+     * [volumes] in the order their archives read them: each set's volumes together, by their
+     * number, the sets in the order their first volume is listed. A set is the volumes that share a
+     * name but for their volume suffix (case aside): a season pack's episodes, a film's and its
+     * subtitles' (Movie.rar, Movie.r00, ... and Movie.subs.rar). Sorted by volume number alone, the
+     * sets interleaved: every set's first volume, then every second, ... A volume alone in its set
+     * (a single-volume archive, or one obfuscated by itself: a8f7d6e5.rar, b91c2d3e.r00) is placed
+     * with the others alone in theirs, by its number as before, and one without a number (whose
+     * name doesn't place it) last.
+     */
+    private fun inArchiveOrder(volumes: List<VolumeMetaData>): List<VolumeMetaData> {
+        val keys = volumes.map { volumeSortKey(it.filename) }
+        val sets = volumes.map { setName(it.filename) }
+        val sizes = sets.groupingBy { it }.eachCount()
+        // Null for the volumes alone in their set, which go together; each group where its first is listed.
+        val groups = sets.map { set -> set.takeIf { sizes.getValue(it) > 1 } }
+        val positions = groups.map(groups::indexOf)
+        return volumes.indices
+            .sortedWith(compareBy({ keys[it] == Int.MAX_VALUE }, { positions[it] }, { keys[it] }))
+            .map(volumes::get)
+    }
+
+    /** The set volume [filename] belongs to: its name but for its volume suffix, in lower case. */
+    private fun setName(filename: String): String = filename.replace(KNOWN_EXTENSION_REGEX, "").lowercase()
 
     private fun VolumeMetaData.isArchiveVolume(): Boolean {
         if (fileHasKnownExtension(filename)) return true

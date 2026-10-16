@@ -191,8 +191,12 @@ object ArchiveService {
             .map(volumes::get)
     }
 
-    /** The set volume [filename] belongs to: its name but for its volume suffix, in lower case. */
-    private fun setName(filename: String): String = filename.replace(KNOWN_EXTENSION_REGEX, "").lowercase()
+    /**
+     * The set volume [filename] belongs to: its name but for its volume suffix, in lower case, and
+     * for any folder a PAR2 index made over one names it in (Show.S01/Show.S01E02.part3.rar).
+     */
+    private fun setName(filename: String): String =
+        filename.substringAfterLast('/').substringAfterLast('\\').replace(KNOWN_EXTENSION_REGEX, "").lowercase()
 
     private fun VolumeMetaData.isArchiveVolume(): Boolean {
         if (fileHasKnownExtension(filename)) return true

@@ -54,6 +54,29 @@ class SeveralSetsTest {
         assertEquals(expected, alphabetical.map { it.filename })
     }
 
+    /**
+     * A PAR2 index made over a folder names each file with its path in it: a volume named by it
+     * still belongs to the set of the volumes named as posted (NR-11).
+     */
+    @Test
+    fun `resolveVolumes keeps a set together whose volumes the PAR2 index names with their folder`() {
+        val sets = (1..2).map { e ->
+            ArchiveGenerator.generate(bytes("episode $e", 150_000), 64L * 1024, ContainerType.RAR5, "Show.S01E0$e.mkv")
+                .mapIndexed { v, volume -> "Show.S01E0$e.part${v + 1}.rar" to volume.data }
+        }
+        val hidden = sets[0][1]
+        val posted = sets.flatten().map { (name, data) ->
+            VolumeMetaData(if (name == hidden.first) "a8f7d6e5" else name, data.size.toLong(), data.copyOf(16 * 1024))
+        }
+
+        val resolved = ArchiveService.resolveVolumes(posted, par2File(listOf("Show.S01/${hidden.first}" to hidden.second)))
+
+        assertEquals(
+            sets.flatten().map { (name, _) -> if (name == hidden.first) "Show.S01/$name" else name },
+            resolved.map { it.filename },
+        )
+    }
+
     @Test
     fun `resolveVolumes keeps volumes obfuscated one by one in their order`() {
         val names = listOf("d2b5a9c4.rar", "a8f7d6e5.rar", "c07e4f1a.rar")

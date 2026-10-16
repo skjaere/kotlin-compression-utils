@@ -3,7 +3,6 @@ package io.skjaere.compressionutils
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.RandomAccessFile
-import java.security.MessageDigest
 
 sealed interface ListFilesResult {
     data class Success(val entries: List<ArchiveFileEntry>) : ListFilesResult
@@ -237,17 +236,16 @@ object ArchiveService {
         return result.type
     }
 
+    // A volume is named by the description of its first 16 KB and its length (see Par2FileNames).
     private fun resolveObfuscatedFilenames(
         volumes: List<VolumeMetaData>,
         par2Data: ByteArray
     ): List<VolumeMetaData> {
-        val par2Info = Par2Parser.parse(par2Data)
-        val hash16kToFilename = par2Info.files.associate { it.hash16kHex() to it.filename }
+        val par2Names = Par2FileNames(Par2Parser.parse(par2Data).files)
 
         return volumes.map { volume ->
             if (!fileHasKnownExtension(volume.filename) && volume.first16kb != null) {
-                val md5Hex = md5Hex(volume.first16kb)
-                val resolvedName = hash16kToFilename[md5Hex]
+                val resolvedName = par2Names.nameOf(volume.first16kb, volume.size)
                 if (resolvedName != null) {
                     volume.copy(filename = resolvedName)
                 } else {
@@ -257,11 +255,6 @@ object ArchiveService {
                 volume
             }
         }
-    }
-
-    private fun md5Hex(data: ByteArray): String {
-        val digest = MessageDigest.getInstance("MD5")
-        return digest.digest(data).joinToString("") { "%02x".format(it) }
     }
 
     internal fun volumeSortKey(filename: String): Int {

@@ -1,8 +1,8 @@
 [versions]
 kotlin = "2.3.21"
-slf4j = "2.0.16"
+slf4j = "2.0.20"
 junit = "5.11.4"
-kotlinx-coroutines = "1.10.1"
+kotlinx-coroutines = "1.11.0"
 
 [libraries]
 xz = { module = "org.tukaani:xz", version = "1.12" }

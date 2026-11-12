@@ -12,7 +12,7 @@ import kotlin.test.assertIs
 /**
  * A release can hold several archive sets: one per episode of a season pack, or a film's and its
  * subtitles'. Each set's volumes stay together, in their own order, and no file of one set is read
- * from another's volumes (NR-2).
+ * from another's volumes.
  */
 class SeveralSetsTest {
     private val rar4 = RarArchiveService()
@@ -56,7 +56,7 @@ class SeveralSetsTest {
 
     /**
      * A PAR2 index made over a folder names each file with its path in it: a volume named by it
-     * still belongs to the set of the volumes named as posted (NR-11).
+     * still belongs to the set of the volumes named as posted.
      */
     @Test
     fun `resolveVolumes keeps a set together whose volumes the PAR2 index names with their folder`() {

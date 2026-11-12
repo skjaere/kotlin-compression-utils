@@ -199,8 +199,8 @@ object ArchiveService {
 
     /**
      * [order] (indices of [volumes], as their names order them) with the RAR5 volumes whose
-     * headers give their place in their set ([Rar5Parser.volumeNumber]) in that order instead
-     * (NR-21), each set where its first in [order] is:
+     * headers give their place in their set ([Rar5Parser.volumeNumber]) in that order instead,
+     * each set where its first in [order] is:
      * - a set names group, when every volume of it gives its place: the headers win where the
      *   names give another order, which is logged;
      * - the volumes of [loose] (which names don't group, or don't place) that give their place,

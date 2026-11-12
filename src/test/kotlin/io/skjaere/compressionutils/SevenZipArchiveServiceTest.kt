@@ -377,7 +377,7 @@ class SevenZipArchiveServiceTest {
 
     /**
      * A 7z set that lacks a volume, or ends early, holds its end header past the end of its bytes:
-     * the archive is malformed as it is, not failing to be read (NR-20). The set whole lists its file.
+     * the archive is malformed as it is, not failing to be read. The set whole lists its file.
      */
     @Test
     fun `a 7z set whose end header lies past its end is a malformed archive`() {

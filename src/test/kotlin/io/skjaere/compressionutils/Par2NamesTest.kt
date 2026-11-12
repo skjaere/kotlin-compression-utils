@@ -7,7 +7,7 @@ import kotlin.test.assertEquals
 /**
  * A PAR2 description names the file whose first 16 KB and length are the ones it gives, and none
  * when several with different names give the same: files that start alike (disc images, whose
- * first 32 KB are zeros, a DVD's VIDEO_TS.IFO and its copy VIDEO_TS.BUP) keep their own names (NR-8).
+ * first 32 KB are zeros, a DVD's VIDEO_TS.IFO and its copy VIDEO_TS.BUP) keep their own names.
  */
 class Par2NamesTest {
     /** A disc image of [size] bytes: zeros for its first 32 KB, as every ISO 9660 image's are. */

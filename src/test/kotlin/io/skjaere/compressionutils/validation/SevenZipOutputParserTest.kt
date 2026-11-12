@@ -10,7 +10,7 @@ class SevenZipOutputParserTest {
     @Test
     fun `parses single file entry`() {
         val output = """
-7-Zip 24.09 (x64) : Copyright (c) 1999-2024 Igor Pavlov
+7-Zip 24.09 (x64)
 
 Scanning the drive for archives:
 1 file, 224 bytes (1 KiB)
@@ -237,7 +237,7 @@ CRC = 12345678
     @Test
     fun `parses RAR archive listing`() {
         val output = """
-7-Zip 24.09 (x64) : Copyright (c) 1999-2024 Igor Pavlov
+7-Zip 24.09 (x64)
 
 Scanning the drive for archives:
 1 file, 188 bytes (1 KiB)

@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 /**
  * A RAR5 volume's main archive header gives its place in its set, whatever name it was posted
  * under: volumes whose names give no place are read in that order, a set whose numbers skip one
- * lacks a volume, and two volumes that give one place can't be told apart (NR-21).
+ * lacks a volume, and two volumes that give one place can't be told apart.
  */
 class Rar5VolumeNumbersTest {
     private val payload = Random(21).nextBytes(200_000)
@@ -109,7 +109,7 @@ class Rar5VolumeNumbersTest {
         }
     }
 
-    /** Named volumes too: a set named part1, part2, part4 lacks its third (NR-13's names agree). */
+    /** Named volumes too: a set named part1, part2, part4 lacks its third, as its names say too. */
     @Test
     fun `a named set whose headers skip a volume lacks it`() {
         val held = rar5Set("Movie.2020").filterIndexed { v, _ -> v != 2 }

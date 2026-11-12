@@ -16,9 +16,8 @@ A Kotlin library for extracting **metadata** from RAR4, RAR5, and 7zip archives.
 
 ## Requirements
 
-- Java 25+
+- Java 17+
 - Kotlin 2.3+
-- Gradle 9+
 
 ## Installation
 
@@ -175,6 +174,15 @@ The `validateArchive` Gradle task verifies that the library's parsed byte offset
 ```
 
 The task exits with code 1 if any file fails validation.
+
+## Building
+
+```bash
+./gradlew build                # Build and run the tests
+./gradlew publishToMavenLocal  # Install to the local Maven repository
+```
+
+The library and its tests are compiled for Java 17 with a JDK 17 toolchain, which Gradle downloads when none is installed, and the tests run on it. The Gradle wrapper (Gradle 9.3.1) runs on JDK 17 or newer; CI runs it on JDK 25. The tests need nothing else: their archives are in `src/test/resources` or generated as they run.
 
 ## Key Classes
 

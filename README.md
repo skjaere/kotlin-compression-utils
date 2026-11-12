@@ -197,3 +197,11 @@ The library and its tests are compiled for Java 17 with a JDK 17 toolchain, whic
 | `SevenZipFileEntry` | Metadata for a file in a 7zip archive |
 | `SplitInfo` | Byte position info for split/multi-volume files |
 | `SeekableInputStream` | Interface for streams supporting random access |
+
+## License
+
+This repository's own code is under the [PolyForm Noncommercial License 1.0.0](LICENSE.md) (SPDX `PolyForm-Noncommercial-1.0.0`): it is free for any non-commercial use, and commercial use needs the author's permission.
+
+These files keep their own licence:
+
+- The Gradle wrapper (`gradlew`, `gradlew.bat` and `gradle/wrapper/`): Apache License 2.0 (SPDX `Apache-2.0`).

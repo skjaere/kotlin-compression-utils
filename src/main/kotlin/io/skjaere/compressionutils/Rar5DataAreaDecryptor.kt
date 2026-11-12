@@ -8,7 +8,7 @@ import kotlin.math.min
 /**
  * Decrypts arbitrary plaintext byte ranges from the data area of an encrypted
  * RAR5 block. This is the streaming-layer primitive: nzb-streamer (or any
- * caller serving Plex byte-range requests) calls [streamDataAreaPlaintext] (or
+ * caller serving a media server's byte-range requests) calls [streamDataAreaPlaintext] (or
  * the array-returning [readDataAreaPlaintext] convenience wrapper) with the
  * desired plaintext range and gets back the corresponding bytes, with all the
  * AES-CBC chaining and offset math handled internally.

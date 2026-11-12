@@ -16,7 +16,7 @@ A Kotlin library for extracting **metadata** from RAR4, RAR5, and 7zip archives.
 
 ## Requirements
 
-- Java 17+
+- Java 17+, from the first release made from the current code. Releases up to v0.4.0 need Java 25+.
 - Kotlin 2.3+
 
 ## Installation
